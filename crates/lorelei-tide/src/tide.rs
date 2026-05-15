@@ -129,6 +129,13 @@ impl EchoRuntime for EchoService {
     }
 }
 
+#[async_trait]
+impl EchoRuntime for Arc<EchoService> {
+    async fn retrieve(&self, q: EchoQuery) -> Result<Vec<lorelei_core::EchoHit>, LoreleiError> {
+        EchoService::retrieve(self.as_ref(), q).await
+    }
+}
+
 pub struct TideEngine<L: LoreRuntime, E: EchoRuntime, S: SongProvider> {
     lore: L,
     echo: E,
@@ -516,6 +523,28 @@ impl ShellRuntime for ShellRegistryPg {
         input: JsonValue,
     ) -> Result<lorelei_core::ShellResult, LoreleiError> {
         ShellRegistryPg::execute(self, tenant_id, run_id, shell_name, call, input).await
+    }
+}
+
+#[async_trait]
+impl ShellRuntime for Arc<ShellRegistryPg> {
+    fn validate_name(&self, name: &str) -> Result<(), LoreleiError> {
+        ShellRegistryPg::validate_name(self.as_ref(), name)
+    }
+
+    fn risk(&self, name: &str) -> Result<ShellRisk, LoreleiError> {
+        ShellRegistryPg::risk(self.as_ref(), name)
+    }
+
+    async fn execute(
+        &self,
+        tenant_id: Uuid,
+        run_id: Uuid,
+        shell_name: &str,
+        call: ShellCall,
+        input: JsonValue,
+    ) -> Result<lorelei_core::ShellResult, LoreleiError> {
+        ShellRegistryPg::execute(self.as_ref(), tenant_id, run_id, shell_name, call, input).await
     }
 }
 

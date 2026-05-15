@@ -17,7 +17,7 @@ pub async fn run() -> Result<()> {
 
     let cli = Cli::parse();
     match cli.command {
-        Commands::Init => cmd_init().await,
+        Commands::Init { song_provider, reload } => cmd_init(song_provider, reload).await,
         Commands::Ask { message } => cmd_ask(message).await,
         Commands::Memo { content } => cmd_memo(content).await,
         Commands::Echo { query } => cmd_echo(query).await,
@@ -55,7 +55,14 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Commands {
     /// Create `lorelei.toml` and `.env` from examples.
-    Init,
+    Init {
+        /// Set the configured Song provider name (from `[providers.<name>]`).
+        #[arg(long)]
+        song_provider: Option<String>,
+        /// Attempt to reload Harbor config after writing files.
+        #[arg(long, default_value_t = true)]
+        reload: bool,
+    },
     /// Ask Lorelei (currently: runs retrieval via Harbor and prints hits).
     Ask { message: String },
     /// Save a manual Pearl via Harbor.
@@ -86,7 +93,7 @@ enum ReefCmd {
     Logs,
 }
 
-async fn cmd_init() -> Result<()> {
+async fn cmd_init(song_provider: Option<String>, reload: bool) -> Result<()> {
     let root = std::env::current_dir()?;
     let toml_example = root.join("lorelei.toml.example");
     let env_example = root.join(".env.example");
@@ -108,6 +115,11 @@ async fn cmd_init() -> Result<()> {
         println!("{} {}", "exists".yellow(), "lorelei.toml".bold());
     }
 
+    if let Some(name) = song_provider {
+        set_song_provider(&toml_out, &name)?;
+        println!("{} {}", "updated".green(), format!("song provider = {name}").bold());
+    }
+
     if !env_out.exists() {
         let template = std::fs::read_to_string(&env_example)
             .with_context(|| format!("read {}", env_example.display()))?;
@@ -123,18 +135,77 @@ async fn cmd_init() -> Result<()> {
         println!("{} {}", "exists".yellow(), ".env".bold());
     }
 
-    println!(
-        "{} {}",
-        "tip".cyan().bold(),
-        "Use `lori` as an alias for `lore` (see README)."
-    );
+
+
+    if reload {
+        if let Ok((harbor, _tenant_id, _agent_id)) = load_cli_env() {
+            match harbor.post_json("/v1/config/reload", json!({})).await {
+                Ok(_) => println!("{} {}", "ok".green(), "harbor config reloaded"),
+                Err(e) => println!("{} {}", "warn".yellow(), format!("config reload failed: {e}")),
+            }
+        }
+    }
+    Ok(())
+}
+
+fn set_song_provider(path: &std::path::Path, provider: &str) -> Result<()> {
+    if provider.trim().is_empty() {
+        return Err(anyhow!("song provider name must not be empty"));
+    }
+
+    let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+    let mut doc = text.parse::<toml::Value>().context("parse lorelei.toml")?;
+
+    let root = doc
+        .as_table_mut()
+        .ok_or_else(|| anyhow!("lorelei.toml must be a TOML table at root"))?;
+
+    let song = root
+        .entry("song")
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+    if !song.is_table() {
+        *song = toml::Value::Table(toml::Table::new());
+    }
+    let song_tbl = song.as_table_mut().unwrap();
+
+    let prov = song_tbl
+        .entry("provider")
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+    if !prov.is_table() {
+        *prov = toml::Value::Table(toml::Table::new());
+    }
+    let prov_tbl = prov.as_table_mut().unwrap();
+
+    prov_tbl.insert("name".to_string(), toml::Value::String(provider.to_string()));
+
+    std::fs::write(path, toml::to_string_pretty(&doc)?).with_context(|| format!("write {}", path.display()))?;
     Ok(())
 }
 
 async fn cmd_ask(message: String) -> Result<()> {
     println!("{} {}", "ask".cyan().bold(), message);
     // Currently Harbor doesn’t expose a full Tide “ask” endpoint; do retrieval + print.
-    cmd_echo(message).await
+    let (harbor, tenant_id, agent_id) = load_cli_env()?;
+    let resp = harbor
+        .post_json(
+            "/v1/runs",
+            json!({
+              "tenant_id": tenant_id,
+              "agent_id": agent_id,
+              "message": message,
+              "metadata": {}
+            }),
+        )
+        .await?;
+
+    if let Some(ans) = resp.get("answer").and_then(|v| v.as_str()) {
+        println!("{}", "answer".cyan().bold());
+        println!("{ans}");
+        return Ok(());
+    }
+
+    println!("{resp}");
+    Ok(())
 }
 
 async fn cmd_memo(content: String) -> Result<()> {

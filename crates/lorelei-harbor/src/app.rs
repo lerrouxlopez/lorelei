@@ -11,6 +11,8 @@ use chrono::{DateTime, Utc};
 use lorelei_core::{Config as CoreConfig, EchoQuery, NewPearl, PearlType, ShellCall};
 use lorelei_echo::{EchoConfig, EchoService};
 use lorelei_lore::{LoreConfig, LoreStores};
+use lorelei_song::Provider as SongProviderImpl;
+use lorelei_tide::{TideConfig, TideEngine};
 use lorelei_shells::ShellRegistryPg;
 use qdrant_client::Qdrant;
 use serde::{Deserialize, Serialize};
@@ -57,6 +59,7 @@ fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
+        .route("/v1/config/reload", post(reload_config))
         .route("/v1/runs", post(create_run))
         .route("/v1/runs/:run_id", get(get_run))
         .route("/v1/runs/:run_id/currents", get(list_currents))
@@ -93,12 +96,19 @@ fn build_router(state: AppState) -> Router {
 }
 
 struct AppState {
-    cfg: HarborConfig,
+    config_path: String,
     pool: PgPool,
     qdrant: Qdrant,
+    shells: Arc<ShellRegistryPg>,
+    inner: tokio::sync::RwLock<AppStateInner>,
+}
+
+struct AppStateInner {
+    cfg: HarborConfig,
     lore: LoreStores,
-    echo: EchoService,
-    shells: ShellRegistryPg,
+    echo: Arc<EchoService>,
+    song: SongProviderImpl,
+    tide_cfg: TideConfig,
 }
 
 impl AppState {
@@ -108,6 +118,11 @@ impl AppState {
 
         let qdrant = Qdrant::from_url(&cfg.qdrant_url).build()?;
 
+        let config_path = cfg
+            .config_path
+            .clone()
+            .unwrap_or_else(|| "lorelei.toml".to_string());
+
         let lore = LoreStores::new(
             pool.clone(),
             qdrant.clone(),
@@ -116,7 +131,7 @@ impl AppState {
             },
         )?;
 
-        let echo = EchoService::from_config(
+        let echo = Arc::new(EchoService::from_config(
             &cfg.core,
             lore.clone(),
             EchoConfig {
@@ -125,23 +140,90 @@ impl AppState {
                 embedding_model: cfg.echo.embedding_model.clone(),
                 llm_rerank: cfg.echo.llm_rerank,
             },
-        )?;
+        )?);
 
-        let shells = ShellRegistryPg::new(pool.clone());
+        let shells = Arc::new(ShellRegistryPg::new(pool.clone()));
+        let song = lorelei_song::build_song_provider(&cfg.core).map_err(anyhow::Error::msg)?;
+        let tide_cfg = TideConfig::default();
 
         Ok(Self {
-            cfg,
+            config_path,
             pool,
             qdrant,
-            lore,
-            echo,
             shells,
+            inner: tokio::sync::RwLock::new(AppStateInner {
+                cfg,
+                lore,
+                echo,
+                song,
+                tide_cfg,
+            }),
         })
+    }
+
+    async fn rebuild_from_disk(&self) -> Result<(), ApiError> {
+        let text = std::fs::read_to_string(&self.config_path).map_err(|e| {
+            ApiError::bad_request(format!(
+                "failed to read config `{}`: {e}",
+                self.config_path
+            ))
+        })?;
+
+        let mut cfg: HarborConfig =
+            toml::from_str(&text).map_err(|e| ApiError::bad_request(format!("config parse error: {e}")))?;
+
+        cfg.core
+            .validate()
+            .map_err(|e| ApiError::bad_request(e.to_string()))?;
+
+        // Keep runtime URLs from env (not TOML).
+        cfg.database_url = std::env::var("DATABASE_URL")
+            .map_err(|_| ApiError::bad_request("missing DATABASE_URL env var"))?;
+        cfg.qdrant_url =
+            std::env::var("QDRANT_URL").map_err(|_| ApiError::bad_request("missing QDRANT_URL env var"))?;
+        cfg.config_path = Some(self.config_path.clone());
+
+        let lore = LoreStores::new(
+            self.pool.clone(),
+            self.qdrant.clone(),
+            LoreConfig {
+                qdrant_collection: cfg.lore.qdrant_collection.clone(),
+            },
+        )
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+        let echo = Arc::new(
+            EchoService::from_config(
+                &cfg.core,
+                lore.clone(),
+                EchoConfig {
+                    qdrant_collection: cfg.lore.qdrant_collection.clone(),
+                    embedding_provider: cfg.echo.embedding_provider.clone(),
+                    embedding_model: cfg.echo.embedding_model.clone(),
+                    llm_rerank: cfg.echo.llm_rerank,
+                },
+            )
+            .map_err(|e| ApiError::bad_request(e.to_string()))?,
+        );
+
+        let song = lorelei_song::build_song_provider(&cfg.core)
+            .map_err(|e| ApiError::bad_request(e.to_string()))?;
+        let tide_cfg = TideConfig::default();
+
+        let mut w = self.inner.write().await;
+        w.cfg = cfg;
+        w.lore = lore;
+        w.echo = echo;
+        w.song = song;
+        w.tide_cfg = tide_cfg;
+        Ok(())
     }
 }
 
 #[derive(Debug, Clone, Deserialize)]
 struct HarborConfig {
+    #[serde(skip)]
+    config_path: Option<String>,
     #[serde(flatten)]
     core: CoreConfig,
     #[serde(default)]
@@ -209,6 +291,7 @@ impl HarborConfig {
 
         let mut cfg: Self = toml::from_str(&text)
             .map_err(|e| ApiError::bad_request(format!("config parse error: {e}")))?;
+        cfg.config_path = Some(path.clone());
 
         cfg.core
             .validate()
@@ -269,9 +352,19 @@ async fn readyz(State(s): State<Arc<AppState>>) -> Result<impl IntoResponse, Api
     Ok((StatusCode::OK, Json(json!({ "ready": true }))))
 }
 
+async fn reload_config(State(s): State<Arc<AppState>>) -> Result<impl IntoResponse, ApiError> {
+    s.rebuild_from_disk().await?;
+    Ok((StatusCode::OK, Json(json!({ "reloaded": true }))))
+}
+
 #[derive(Debug, Deserialize)]
 struct CreateRunRequest {
     tenant_id: Uuid,
+    #[serde(default)]
+    agent_id: Option<Uuid>,
+    /// If set, executes a full Tide run and returns an answer.
+    #[serde(default)]
+    message: Option<String>,
     #[serde(default)]
     metadata: serde_json::Value,
 }
@@ -289,18 +382,43 @@ async fn create_run(
     State(s): State<Arc<AppState>>,
     Json(req): Json<CreateRunRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let run = s
-        .lore
+    if let Some(message) = req.message {
+        let inner = s.inner.read().await;
+        let engine = TideEngine::new(
+            inner.lore.clone(),
+            inner.echo.clone(),
+            inner.song.clone(),
+            s.shells.clone(),
+            inner.tide_cfg.clone(),
+        )
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+
+        let out = engine
+            .run(req.tenant_id, req.agent_id, message)
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+
+        return Ok((
+            StatusCode::OK,
+            Json(json!({
+              "run_id": out.run_id,
+              "answer": out.answer,
+            })),
+        ));
+    }
+
+    let lore = { s.inner.read().await.lore.clone() };
+    let run = lore
         .create_run(req.tenant_id, req.metadata)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    Ok((StatusCode::CREATED, Json(RunResponse {
-        id: run.id,
-        tenant_id: run.tenant_id,
-        started_at: run.started_at,
-        ended_at: run.ended_at,
-        metadata: run.metadata,
-    })))
+    Ok((StatusCode::CREATED, Json(json!({
+      "id": run.id,
+      "tenant_id": run.tenant_id,
+      "started_at": run.started_at,
+      "ended_at": run.ended_at,
+      "metadata": run.metadata,
+    }))))
 }
 
 async fn get_run(
@@ -308,8 +426,8 @@ async fn get_run(
     Path(run_id): Path<Uuid>,
     Query(q): Query<TenantQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let run = s
-        .lore
+    let lore = { s.inner.read().await.lore.clone() };
+    let run = lore
         .get_run(q.tenant_id, run_id)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
@@ -335,8 +453,8 @@ async fn list_currents(
     Path(run_id): Path<Uuid>,
     Query(q): Query<TenantQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let events = s
-        .lore
+    let lore = { s.inner.read().await.lore.clone() };
+    let events = lore
         .list_currents(q.tenant_id, run_id)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
@@ -364,8 +482,8 @@ fn default_top_k() -> usize {
 }
 
 async fn echo(State(s): State<Arc<AppState>>, Json(req): Json<EchoRequest>) -> Result<impl IntoResponse, ApiError> {
-    let hits = s
-        .echo
+    let echo = { s.inner.read().await.echo.clone() };
+    let hits = echo
         .retrieve(EchoQuery {
             text: req.text,
             tenant_id: req.tenant_id,
@@ -393,8 +511,8 @@ async fn create_pearl(
     State(s): State<Arc<AppState>>,
     Json(req): Json<CreatePearlRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let saved = s
-        .lore
+    let lore = { s.inner.read().await.lore.clone() };
+    let saved = lore
         .save_pearl(req.tenant_id, req.agent_id, req.run_id, req.pearl)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
@@ -416,8 +534,8 @@ async fn list_pearls(
     State(s): State<Arc<AppState>>,
     Query(q): Query<ListPearlsQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let items = s
-        .lore
+    let lore = { s.inner.read().await.lore.clone() };
+    let items = lore
         .list_pearls(q.tenant_id, q.pearl_type, q.include_deleted, q.top_k as i64)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
@@ -429,8 +547,8 @@ async fn get_pearl(
     Path(pearl_id): Path<Uuid>,
     Query(q): Query<TenantQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let p = s
-        .lore
+    let lore = { s.inner.read().await.lore.clone() };
+    let p = lore
         .get_pearl(q.tenant_id, pearl_id, true)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
@@ -443,7 +561,8 @@ async fn delete_pearl(
     Path(pearl_id): Path<Uuid>,
     Query(q): Query<TenantQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    s.lore
+    let lore = { s.inner.read().await.lore.clone() };
+    lore
         .forget_pearl(q.tenant_id, pearl_id)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
@@ -496,7 +615,8 @@ async fn call_shell(
 }
 
 async fn list_providers(State(s): State<Arc<AppState>>) -> Result<impl IntoResponse, ApiError> {
-    let items = s
+    let inner = s.inner.read().await;
+    let items = inner
         .cfg
         .core
         .providers
