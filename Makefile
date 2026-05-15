@@ -1,4 +1,4 @@
-.PHONY: migrate db-reset
+.PHONY: migrate db-reset up down logs ship
 
 # Requires:
 # - PostgreSQL reachable via $$DATABASE_URL
@@ -12,3 +12,14 @@ db-reset:
 	sqlx database create
 	sqlx migrate run
 
+up:
+	docker compose up --build
+
+down:
+	docker compose down
+
+logs:
+	docker compose logs -f --tail=200
+
+ship:
+	docker build -f docker/Dockerfile --target runtime -t lorelei-harbor:local .

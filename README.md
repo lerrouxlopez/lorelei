@@ -37,3 +37,11 @@ Create an alias named `lori`:
   Set-Alias lori lore
   ```
 
+## Docker (Harbor + Postgres + Qdrant)
+
+```bash
+cp .env.example .env
+cp lorelei.toml.example lorelei.toml
+docker compose up --build
+curl http://localhost:8080/healthz
+```
