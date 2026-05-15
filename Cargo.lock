@@ -1259,6 +1259,14 @@ version = "0.1.0"
 [[package]]
 name = "lorelei-siren"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "lorelei-core",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
+]
 
 [[package]]
 name = "lorelei-song"

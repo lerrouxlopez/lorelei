@@ -351,6 +351,8 @@ pub struct ShellResult {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProposedAction {
+    pub tenant_id: Uuid,
+    pub target_tenant_id: Uuid,
     pub call: ShellCall,
     pub risk: ShellRisk,
     #[serde(default)]

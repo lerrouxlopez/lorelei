@@ -110,6 +110,8 @@ fn serde_roundtrip_events_hits_and_decisions() {
     hit.validate().unwrap();
 
     let action = ProposedAction {
+        tenant_id: Uuid::new_v4(),
+        target_tenant_id: Uuid::new_v4(),
         call: ShellCall {
             program: "echo".to_string(),
             args: vec!["hi".to_string()],
