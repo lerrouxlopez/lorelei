@@ -28,15 +28,27 @@ fn serde_roundtrip_pearl_and_new_pearl() {
     let new_pearl = NewPearl {
         pearl_type: PearlType::Memory,
         content: "hello".to_string(),
+        tags: vec!["t1".to_string()],
+        confidence: Some(0.5),
+        importance: None,
+        metadata: json!({"k":"v"}),
     };
     new_pearl.validate().unwrap();
 
     let pearl = Pearl {
         id: Uuid::new_v4(),
+        tenant_id: Uuid::new_v4(),
+        agent_id: Some(Uuid::new_v4()),
         run_id: Uuid::new_v4(),
         pearl_type: PearlType::Insight,
         created_at: Utc.with_ymd_and_hms(2026, 5, 15, 1, 2, 3).unwrap(),
+        deleted_at: None,
+        last_echoed_at: None,
         content: "world".to_string(),
+        tags: vec!["t2".to_string()],
+        confidence: Some(1.0),
+        importance: Some(0.0),
+        metadata: json!({"m":1}),
     };
 
     let encoded = serde_json::to_string(&pearl).unwrap();
@@ -129,7 +141,11 @@ fn serde_roundtrip_events_hits_and_decisions() {
 fn validation_rejects_empty_strings_and_bad_ranges() {
     assert!(NewPearl {
         pearl_type: PearlType::Note,
-        content: "   ".to_string()
+        content: "   ".to_string(),
+        tags: vec![],
+        confidence: None,
+        importance: None,
+        metadata: json!(null),
     }
     .validate()
     .is_err());

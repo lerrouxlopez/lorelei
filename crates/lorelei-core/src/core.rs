@@ -43,6 +43,15 @@ impl LoreleiError {
     }
 }
 
+fn validate_01(name: &str, value: Option<f64>) -> Result<(), LoreleiError> {
+    if let Some(v) = value {
+        if !v.is_finite() || v < 0.0 || v > 1.0 {
+            return Err(LoreleiError::validation(format!("{name} must be between 0 and 1")));
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PearlType {
@@ -51,10 +60,18 @@ pub enum PearlType {
     Insight,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NewPearl {
     pub pearl_type: PearlType,
     pub content: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub importance: Option<f64>,
+    #[serde(default)]
+    pub metadata: JsonValue,
 }
 
 impl NewPearl {
@@ -62,23 +79,52 @@ impl NewPearl {
         if self.content.trim().is_empty() {
             return Err(LoreleiError::validation("new pearl content must not be empty"));
         }
+        validate_01("confidence", self.confidence)?;
+        validate_01("importance", self.importance)?;
+        for t in &self.tags {
+            if t.trim().is_empty() {
+                return Err(LoreleiError::validation("new pearl tag must not be empty"));
+            }
+        }
         Ok(())
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Pearl {
     pub id: Uuid,
+    pub tenant_id: Uuid,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<Uuid>,
     pub run_id: Uuid,
     pub pearl_type: PearlType,
     pub created_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_echoed_at: Option<DateTime<Utc>>,
     pub content: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub importance: Option<f64>,
+    #[serde(default)]
+    pub metadata: JsonValue,
 }
 
 impl Pearl {
     pub fn validate(&self) -> Result<(), LoreleiError> {
         if self.content.trim().is_empty() {
             return Err(LoreleiError::validation("pearl content must not be empty"));
+        }
+        validate_01("confidence", self.confidence)?;
+        validate_01("importance", self.importance)?;
+        for t in &self.tags {
+            if t.trim().is_empty() {
+                return Err(LoreleiError::validation("pearl tag must not be empty"));
+            }
         }
         Ok(())
     }
@@ -171,7 +217,7 @@ impl EchoHit {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SongRequest {
     pub prompt: String,
     #[serde(default)]
@@ -332,14 +378,42 @@ pub trait SongProvider: Send + Sync {
 
 #[async_trait]
 pub trait LoreStore: Send + Sync {
-    async fn put_pearl(&self, run_id: Uuid, pearl: NewPearl) -> Result<Pearl, LoreleiError>;
-    async fn get_pearl(&self, id: Uuid) -> Result<Option<Pearl>, LoreleiError>;
+    async fn save_pearl(
+        &self,
+        tenant_id: Uuid,
+        agent_id: Option<Uuid>,
+        run_id: Uuid,
+        pearl: NewPearl,
+    ) -> Result<Pearl, LoreleiError>;
+    async fn get_pearl(
+        &self,
+        tenant_id: Uuid,
+        id: Uuid,
+        include_deleted: bool,
+    ) -> Result<Option<Pearl>, LoreleiError>;
+    async fn forget_pearl(&self, tenant_id: Uuid, id: Uuid) -> Result<(), LoreleiError>;
+    async fn update_last_echoed_at(
+        &self,
+        tenant_id: Uuid,
+        id: Uuid,
+        at: DateTime<Utc>,
+    ) -> Result<(), LoreleiError>;
 }
 
 #[async_trait]
 pub trait CurrentStore: Send + Sync {
-    async fn append_event(&self, event: CurrentEvent) -> Result<(), LoreleiError>;
-    async fn list_events(&self, run_id: Uuid) -> Result<Vec<CurrentEvent>, LoreleiError>;
+    async fn write_current(
+        &self,
+        tenant_id: Uuid,
+        event: CurrentEvent,
+        confidence: Option<f64>,
+        importance: Option<f64>,
+    ) -> Result<(), LoreleiError>;
+    async fn list_currents(
+        &self,
+        tenant_id: Uuid,
+        run_id: Uuid,
+    ) -> Result<Vec<CurrentEvent>, LoreleiError>;
 }
 
 #[async_trait]
@@ -366,4 +440,3 @@ pub trait SirenPolicy: Send + Sync {
 pub trait TideRunner: Send + Sync {
     async fn run(&self, run: Run) -> Result<(), LoreleiError>;
 }
-
