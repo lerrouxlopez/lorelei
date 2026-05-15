@@ -1408,6 +1408,23 @@ version = "0.1.0"
 [[package]]
 name = "lorelei-tide"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "futures",
+ "lorelei-core",
+ "lorelei-echo",
+ "lorelei-lore",
+ "lorelei-shells",
+ "lorelei-siren",
+ "lorelei-song",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
 
 [[package]]
 name = "lru-slab"

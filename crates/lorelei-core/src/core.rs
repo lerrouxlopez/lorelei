@@ -259,12 +259,34 @@ pub struct SongChunk {
     pub content: String,
     #[serde(default)]
     pub is_final: bool,
+    #[serde(default)]
+    pub tool_calls: Vec<ToolCall>,
 }
 
 impl SongChunk {
     pub fn validate(&self) -> Result<(), LoreleiError> {
-        if self.content.trim().is_empty() {
+        if self.content.trim().is_empty() && self.tool_calls.is_empty() {
             return Err(LoreleiError::validation("song chunk content must not be empty"));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolCall {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub arguments: JsonValue,
+}
+
+impl ToolCall {
+    pub fn validate(&self) -> Result<(), LoreleiError> {
+        if self.id.trim().is_empty() {
+            return Err(LoreleiError::validation("tool call id must not be empty"));
+        }
+        if self.name.trim().is_empty() {
+            return Err(LoreleiError::validation("tool call name must not be empty"));
         }
         Ok(())
     }
@@ -297,6 +319,10 @@ pub struct ProviderCapabilities {
     pub max_context_tokens: Option<u32>,
     #[serde(default)]
     pub json_mode: bool,
+    #[serde(default)]
+    pub tools: bool,
+    #[serde(default)]
+    pub embeddings: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
