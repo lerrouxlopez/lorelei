@@ -1,6 +1,0 @@
-DROP TABLE IF EXISTS shell_calls;
-DROP TABLE IF EXISTS pearls;
-DROP TABLE IF EXISTS currents;
-DROP TABLE IF EXISTS runs;
-DROP TYPE IF EXISTS pearl_type;
-
