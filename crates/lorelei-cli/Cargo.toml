@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+dotenvy = "0.15"
+lorelei-core = { path = "../lorelei-core" }
 
 [[bin]]
 name = "lore"

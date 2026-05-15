@@ -1,0 +1,38 @@
+# Lorelei configuration (example)
+# Copy to `lorelei.toml` and adjust values for your environment.
+#
+# NOTE: Do not put API keys directly in this file. Use `api_key_env` and store
+# secrets in your environment (see `.env.example`).
+
+[agent]
+tenant_id = "00000000-0000-0000-0000-000000000001"
+agent_id = "00000000-0000-0000-0000-000000000002"
+default_provider = "mock"
+default_embedding_provider = "mock"
+
+[harbor]
+host = "127.0.0.1"
+port = 7331
+
+[lore]
+postgres_url_env = "LORELEI_POSTGRES_URL"
+qdrant_url_env = "LORELEI_QDRANT_URL"
+collection = "lorelei"
+
+[echo]
+top_k = 20
+rerank_top_k = 10
+min_confidence = 0.25
+
+[siren]
+require_approval_for_high_risk = true
+allow_shell_execution = false
+allow_network_tools = false
+
+[providers.mock]
+kind = "mock"
+base_url = "http://127.0.0.1:0"
+api_key_env = "LORELEI_MOCK_API_KEY"
+chat_model = "mock-chat"
+embedding_model = "mock-embed"
+
