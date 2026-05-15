@@ -44,6 +44,8 @@ services:
       DATABASE_URL: ${DATABASE_URL}
       QDRANT_URL: ${QDRANT_URL}
       LORELEI_CONFIG: /app/lorelei.toml
+      # Optional local provider key (only needed if your local OpenAI-compatible endpoint requires it).
+      LORELEI_LOCAL_API_KEY: ${LORELEI_LOCAL_API_KEY:-}
       RUST_LOG: ${RUST_LOG:-info}
     volumes:
       - ./lorelei.toml:/app/lorelei.toml:ro
@@ -62,4 +64,3 @@ services:
     image: ollama/ollama:latest
     ports:
       - "11434:11434"
-

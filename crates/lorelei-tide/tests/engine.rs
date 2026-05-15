@@ -207,3 +207,339 @@ async fn tide_runs_with_mocks_and_saves_pearls() {
 
     assert!(!out.answer.is_empty());
 }
+
+#[derive(Default)]
+struct MockSongPlanRootStep;
+
+#[async_trait]
+impl SongProvider for MockSongPlanRootStep {
+    async fn capabilities(&self) -> Result<ProviderCapabilities, LoreleiError> {
+        Ok(ProviderCapabilities {
+            streaming: false,
+            max_context_tokens: None,
+            json_mode: true,
+            tools: false,
+            embeddings: false,
+        })
+    }
+
+    async fn song(&self, request: SongRequest) -> Result<SongResponse, LoreleiError> {
+        let p = request.prompt;
+        let out = if p.contains("Tide planner") {
+            // Model returns a *single step* as the top-level JSON object (common mistake).
+            r#"{"type":"noop","message":"ok"}"#.to_string()
+        } else if p.contains("Lore Extractor") {
+            r#"[]"#.to_string()
+        } else if p.contains("Lore Critic") {
+            r#"[]"#.to_string()
+        } else if p.contains("Repair the following") {
+            r#"{"steps":[{"type":"noop","message":"repaired"}]}"#.to_string()
+        } else {
+            "final answer".to_string()
+        };
+
+        Ok(SongResponse {
+            id: Uuid::new_v4(),
+            created_at: chrono::Utc::now(),
+            chunks: vec![SongChunk {
+                index: 0,
+                content: out,
+                is_final: true,
+                tool_calls: vec![],
+            }],
+            metadata: json!({"mock": true}),
+        })
+    }
+
+    async fn song_stream(
+        &self,
+        _request: SongRequest,
+    ) -> Result<futures::stream::BoxStream<'static, Result<SongChunk, LoreleiError>>, LoreleiError> {
+        Err(LoreleiError::SongProvider {
+            message: "mock streaming not used".to_string(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn tide_accepts_plan_as_root_step_object() {
+    let lore = MockLore::default();
+    let echo = MockEcho;
+    let song = MockSongPlanRootStep::default();
+    let shells: Arc<dyn ShellRuntime> = Arc::new(MockShells);
+
+    let cfg = TideConfig {
+        siren: lorelei_siren::SirenConfig {
+            allow_shell_execution: true,
+            allow_network_tools: false,
+        },
+        siren_prompt_path: None,
+        lore_extractor_path: "prompts/lore_extractor.md".to_string(),
+        lore_critic_path: "prompts/lore_critic.md".to_string(),
+    };
+
+    let engine = TideEngine::new(lore, echo, song, shells, cfg).unwrap();
+    let tenant_id = Uuid::new_v4();
+
+    let out = engine
+        .run(tenant_id, None, "hello".to_string())
+        .await
+        .unwrap();
+
+    assert!(!out.answer.is_empty());
+}
+
+#[derive(Default)]
+struct MockSongNoisyJson;
+
+#[async_trait]
+impl SongProvider for MockSongNoisyJson {
+    async fn capabilities(&self) -> Result<ProviderCapabilities, LoreleiError> {
+        Ok(ProviderCapabilities {
+            streaming: false,
+            max_context_tokens: None,
+            json_mode: true,
+            tools: false,
+            embeddings: false,
+        })
+    }
+
+    async fn song(&self, request: SongRequest) -> Result<SongResponse, LoreleiError> {
+        let p = request.prompt;
+        let out = if p.contains("Tide planner") {
+            r#"{"steps":[{"type":"noop","message":"ok"}]}"#.to_string()
+        } else if p.contains("Lore Extractor") {
+            // Return extra junk JSON values before the correct value.
+            // Tide should pick the first value that matches Vec<NewPearl>.
+            r#"{"noise":true}
+[{"pearl_type":"note","content":"remember this","tags":[],"metadata":{}}]"#
+                .to_string()
+        } else if p.contains("Lore Critic") {
+            // Return pearls again, then the actual critic decisions.
+            r#"[{"pearl_type":"note","content":"x","tags":[],"metadata":{}}]
+[{"accept":true,"reason":"ok"}]"#
+                .to_string()
+        } else if p.contains("Repair the following") {
+            r#"[{"accept":true,"reason":"repaired"}]"#.to_string()
+        } else {
+            "final answer".to_string()
+        };
+
+        Ok(SongResponse {
+            id: Uuid::new_v4(),
+            created_at: chrono::Utc::now(),
+            chunks: vec![SongChunk {
+                index: 0,
+                content: out,
+                is_final: true,
+                tool_calls: vec![],
+            }],
+            metadata: json!({"mock": true}),
+        })
+    }
+
+    async fn song_stream(
+        &self,
+        _request: SongRequest,
+    ) -> Result<futures::stream::BoxStream<'static, Result<SongChunk, LoreleiError>>, LoreleiError> {
+        Err(LoreleiError::SongProvider {
+            message: "mock streaming not used".to_string(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn tide_extract_and_critic_accept_noisy_multi_json() {
+    let lore = MockLore::default();
+    let echo = MockEcho;
+    let song = MockSongNoisyJson::default();
+    let shells: Arc<dyn ShellRuntime> = Arc::new(MockShells);
+
+    let cfg = TideConfig {
+        siren: lorelei_siren::SirenConfig {
+            allow_shell_execution: true,
+            allow_network_tools: false,
+        },
+        siren_prompt_path: None,
+        lore_extractor_path: "prompts/lore_extractor.md".to_string(),
+        lore_critic_path: "prompts/lore_critic.md".to_string(),
+    };
+
+    let engine = TideEngine::new(lore, echo, song, shells, cfg).unwrap();
+    let tenant_id = Uuid::new_v4();
+
+    let out = engine
+        .run(tenant_id, None, "hello".to_string())
+        .await
+        .unwrap();
+
+    assert!(!out.answer.is_empty());
+}
+
+#[derive(Default)]
+struct MockSongRepairWithPreamble;
+
+#[async_trait]
+impl SongProvider for MockSongRepairWithPreamble {
+    async fn capabilities(&self) -> Result<ProviderCapabilities, LoreleiError> {
+        Ok(ProviderCapabilities {
+            streaming: false,
+            max_context_tokens: None,
+            json_mode: true,
+            tools: false,
+            embeddings: false,
+        })
+    }
+
+    async fn song(&self, request: SongRequest) -> Result<SongResponse, LoreleiError> {
+        let p = request.prompt;
+        let out = if p.contains("Tide planner") {
+            // Force a repair path by returning non-JSON.
+            "not json".to_string()
+        } else if p.contains("Repair the following") {
+            // Model adds preamble text before the JSON.
+            "Here is the repaired JSON:\n\n{\"steps\":[{\"type\":\"noop\",\"message\":\"hello\"}]}".to_string()
+        } else if p.contains("Lore Extractor") {
+            r#"[]"#.to_string()
+        } else if p.contains("Lore Critic") {
+            r#"[]"#.to_string()
+        } else {
+            "final answer".to_string()
+        };
+
+        Ok(SongResponse {
+            id: Uuid::new_v4(),
+            created_at: chrono::Utc::now(),
+            chunks: vec![SongChunk {
+                index: 0,
+                content: out,
+                is_final: true,
+                tool_calls: vec![],
+            }],
+            metadata: json!({"mock": true}),
+        })
+    }
+
+    async fn song_stream(
+        &self,
+        _request: SongRequest,
+    ) -> Result<futures::stream::BoxStream<'static, Result<SongChunk, LoreleiError>>, LoreleiError> {
+        Err(LoreleiError::SongProvider {
+            message: "mock streaming not used".to_string(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn tide_plan_repair_accepts_preamble_before_json() {
+    let lore = MockLore::default();
+    let echo = MockEcho;
+    let song = MockSongRepairWithPreamble::default();
+    let shells: Arc<dyn ShellRuntime> = Arc::new(MockShells);
+
+    let cfg = TideConfig {
+        siren: lorelei_siren::SirenConfig {
+            allow_shell_execution: true,
+            allow_network_tools: false,
+        },
+        siren_prompt_path: None,
+        lore_extractor_path: "prompts/lore_extractor.md".to_string(),
+        lore_critic_path: "prompts/lore_critic.md".to_string(),
+    };
+
+    let engine = TideEngine::new(lore, echo, song, shells, cfg).unwrap();
+    let tenant_id = Uuid::new_v4();
+
+    let out = engine
+        .run(tenant_id, None, "hello".to_string())
+        .await
+        .unwrap();
+
+    assert!(!out.answer.is_empty());
+}
+
+#[derive(Default)]
+struct MockSongExtractorFencedWrapped;
+
+#[async_trait]
+impl SongProvider for MockSongExtractorFencedWrapped {
+    async fn capabilities(&self) -> Result<ProviderCapabilities, LoreleiError> {
+        Ok(ProviderCapabilities {
+            streaming: false,
+            max_context_tokens: None,
+            json_mode: true,
+            tools: false,
+            embeddings: false,
+        })
+    }
+
+    async fn song(&self, request: SongRequest) -> Result<SongResponse, LoreleiError> {
+        let p = request.prompt;
+        let out = if p.contains("Tide planner") {
+            r#"{"steps":[{"type":"noop","message":"ok"}]}"#.to_string()
+        } else if p.contains("Lore Extractor") {
+            // Model returns fenced JSON and wraps the list in a `data` field, plus leading whitespace in a key.
+            "```json\n{\"data\":[{\" pearl_type\":\"note\",\"content\":\"hello\",\"tags\":[],\"metadata\":{}}]}\n```"
+                .to_string()
+        } else if p.contains("Lore Critic") {
+            r#"[{"accept":true,"reason":"ok"}]"#.to_string()
+        } else if p.contains("Repair the following") {
+            if p.contains("PearlList") {
+                r#"[{"pearl_type":"note","content":"hello","tags":[],"metadata":{}}]"#.to_string()
+            } else {
+                r#"{"steps":[{"type":"noop","message":"repaired"}]}"#.to_string()
+            }
+        } else {
+            "final answer".to_string()
+        };
+
+        Ok(SongResponse {
+            id: Uuid::new_v4(),
+            created_at: chrono::Utc::now(),
+            chunks: vec![SongChunk {
+                index: 0,
+                content: out,
+                is_final: true,
+                tool_calls: vec![],
+            }],
+            metadata: json!({"mock": true}),
+        })
+    }
+
+    async fn song_stream(
+        &self,
+        _request: SongRequest,
+    ) -> Result<futures::stream::BoxStream<'static, Result<SongChunk, LoreleiError>>, LoreleiError> {
+        Err(LoreleiError::SongProvider {
+            message: "mock streaming not used".to_string(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn tide_extractor_accepts_fenced_wrapped_json() {
+    let lore = MockLore::default();
+    let echo = MockEcho;
+    let song = MockSongExtractorFencedWrapped::default();
+    let shells: Arc<dyn ShellRuntime> = Arc::new(MockShells);
+
+    let cfg = TideConfig {
+        siren: lorelei_siren::SirenConfig {
+            allow_shell_execution: true,
+            allow_network_tools: false,
+        },
+        siren_prompt_path: None,
+        lore_extractor_path: "prompts/lore_extractor.md".to_string(),
+        lore_critic_path: "prompts/lore_critic.md".to_string(),
+    };
+
+    let engine = TideEngine::new(lore, echo, song, shells, cfg).unwrap();
+    let tenant_id = Uuid::new_v4();
+
+    let out = engine
+        .run(tenant_id, None, "hello".to_string())
+        .await
+        .unwrap();
+
+    assert!(!out.answer.is_empty());
+}

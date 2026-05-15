@@ -318,9 +318,9 @@ impl<L: LoreRuntime, E: EchoRuntime, S: SongProvider> TideEngine<L, E, S> {
         );
 
         let json_text = self.ask_json(prompt).await?;
-        match parse_strict_json::<Plan>(&json_text) {
+        match parse_plan_anywhere(&json_text) {
             Ok(v) => Ok(v),
-            Err(_) => self.repair_json_once::<Plan>(&json_text, "Plan").await,
+            Err(_) => self.repair_plan_once(&json_text).await,
         }
     }
 
@@ -443,10 +443,22 @@ impl<L: LoreRuntime, E: EchoRuntime, S: SongProvider> TideEngine<L, E, S> {
             answer
         );
         let json_text = self.ask_json(prompt).await?;
-        match parse_strict_json::<Vec<NewPearl>>(&json_text) {
-            Ok(v) => Ok(v),
-            Err(_) => self.repair_json_once::<Vec<NewPearl>>(&json_text, "PearlList").await,
+        let parsed = match parse_json_anywhere::<Vec<NewPearl>>(&json_text) {
+            Ok(v) => v,
+            Err(_) => self.repair_json_once::<Vec<NewPearl>>(&json_text, "PearlList").await?,
+        };
+
+        // Local models frequently emit partial/empty fields; treat invalid pearls as "no-op"
+        // rather than failing the whole run.
+        let mut out = Vec::new();
+        for p in parsed {
+            if let Err(e) = p.validate() {
+                tracing::warn!(error=%e, "tide.extract_pearls.invalid_skipped");
+                continue;
+            }
+            out.push(p);
         }
+        Ok(out)
     }
 
     async fn critique_pearls(&self, pearls: &[NewPearl]) -> Result<Vec<CritiqueDecision>, LoreleiError> {
@@ -456,7 +468,7 @@ impl<L: LoreRuntime, E: EchoRuntime, S: SongProvider> TideEngine<L, E, S> {
             serde_json::to_string(pearls).unwrap_or_default()
         );
         let json_text = self.ask_json(prompt).await?;
-        match parse_strict_json::<Vec<CritiqueDecision>>(&json_text) {
+        match parse_json_anywhere::<Vec<CritiqueDecision>>(&json_text) {
             Ok(v) => Ok(v),
             Err(_) => self
                 .repair_json_once::<Vec<CritiqueDecision>>(&json_text, "CritiqueList")
@@ -474,7 +486,13 @@ impl<L: LoreRuntime, E: EchoRuntime, S: SongProvider> TideEngine<L, E, S> {
                 parameters: Default::default(),
             })
             .await?;
-        Ok(join_chunks(&resp.chunks))
+        let out = join_chunks(&resp.chunks);
+        if out.trim().is_empty() {
+            return Err(LoreleiError::validation(
+                "song provider returned empty text (expected JSON)".to_string(),
+            ));
+        }
+        Ok(out)
     }
 
     async fn repair_json_once<T: for<'de> Deserialize<'de>>(
@@ -486,7 +504,17 @@ impl<L: LoreRuntime, E: EchoRuntime, S: SongProvider> TideEngine<L, E, S> {
             "Repair the following into strict JSON for type {type_name}. Return JSON only.\n\n{bad}"
         );
         let repaired = self.ask_json(prompt).await?;
-        parse_strict_json::<T>(&repaired)
+        parse_json_anywhere::<T>(&repaired)
+    }
+
+    async fn repair_plan_once(&self, bad: &str) -> Result<Plan, LoreleiError> {
+        let prompt = format!(
+            "Repair the following into strict JSON matching exactly this schema:\n\
+             {{\"steps\":[{{\"type\":\"noop\",\"message\":\"...\"}}|{{\"type\":\"shell\",\"name\":\"...\",\"input\":{{...}},\"rationale\":\"...\"}}]}}\n\
+             Return JSON only (top-level object with a `steps` array).\n\n{bad}"
+        );
+        let repaired = self.ask_json(prompt).await?;
+        parse_plan_anywhere(&repaired)
     }
 }
 
@@ -556,9 +584,134 @@ pub struct CritiqueDecision {
 }
 
 fn parse_strict_json<T: for<'de> Deserialize<'de>>(s: &str) -> Result<T, LoreleiError> {
-    serde_json::from_str(s.trim()).map_err(|e| {
-        LoreleiError::validation(format!("invalid JSON: {e}"))
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return Err(LoreleiError::validation("invalid JSON: empty response".to_string()));
+    }
+    serde_json::from_str(trimmed).map_err(|e| {
+        let snippet = truncate(trimmed, 240);
+        LoreleiError::validation(format!("invalid JSON: {e}; snippet={snippet:?}"))
     })
+}
+
+fn parse_json_anywhere<T: for<'de> Deserialize<'de>>(s: &str) -> Result<T, LoreleiError> {
+    // Fast path: standard single JSON value.
+    if let Ok(v) = parse_strict_json::<T>(s) {
+        return Ok(v);
+    }
+
+    // Best-effort: scan for a JSON value starting at any `{` or `[` and try to parse from there.
+    for (i, ch) in s.char_indices() {
+        if ch != '{' && ch != '[' {
+            continue;
+        }
+        let sub = &s[i..];
+        let value: JsonValue = match serde_json::from_str(sub) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let value = trim_json_object_keys(value);
+
+        if let Ok(t) = serde_json::from_value::<T>(value.clone()) {
+            return Ok(t);
+        }
+        // Common wrapper: {"data":[...]} or {"items":[...]}.
+        if let Some(inner) = value.get("data").or_else(|| value.get("items")) {
+            if let Ok(t) = serde_json::from_value::<T>(inner.clone()) {
+                return Ok(t);
+            }
+        }
+    }
+
+    let trimmed = s.trim();
+    let snippet = truncate(trimmed, 240);
+    Err(LoreleiError::validation(format!(
+        "invalid JSON: could not find expected JSON value in output; snippet={snippet:?}"
+    )))
+}
+
+fn trim_json_object_keys(v: JsonValue) -> JsonValue {
+    match v {
+        JsonValue::Object(map) => {
+            let mut out = serde_json::Map::with_capacity(map.len());
+            for (k, v) in map {
+                out.insert(k.trim().to_string(), trim_json_object_keys(v));
+            }
+            JsonValue::Object(out)
+        }
+        JsonValue::Array(arr) => JsonValue::Array(arr.into_iter().map(trim_json_object_keys).collect()),
+        other => other,
+    }
+}
+
+fn parse_plan_loose(s: &str) -> Result<Plan, LoreleiError> {
+    // Strict schema (preferred): {"steps":[...]}
+    if let Ok(p) = parse_strict_json::<Plan>(s) {
+        return Ok(p);
+    }
+
+    // Common model mistake: return a single step object as the root.
+    if let Ok(step) = parse_strict_json::<PlanStep>(s) {
+        return Ok(Plan { steps: vec![step] });
+    }
+
+    // Another common mistake: return steps array as the root.
+    if let Ok(steps) = parse_strict_json::<Vec<PlanStep>>(s) {
+        return Ok(Plan { steps });
+    }
+
+    // Last attempt: extract a "steps" field manually.
+    let v: JsonValue = parse_strict_json(s)?;
+    if let Some(steps_v) = v.get("steps") {
+        let steps: Vec<PlanStep> = serde_json::from_value(steps_v.clone()).map_err(|e| {
+            LoreleiError::validation(format!("invalid Plan.steps: {e}"))
+        })?;
+        return Ok(Plan { steps });
+    }
+
+    Err(LoreleiError::validation(
+        "invalid Plan JSON: expected object with `steps`".to_string(),
+    ))
+}
+
+fn parse_plan_anywhere(s: &str) -> Result<Plan, LoreleiError> {
+    // Try the existing loose parser first (single JSON value cases).
+    if let Ok(p) = parse_plan_loose(s) {
+        return Ok(p);
+    }
+
+    // If output contains leading text, scan for a JSON value starting at any `{` or `[` and try
+    // to parse from there.
+    for (i, ch) in s.char_indices() {
+        if ch != '{' && ch != '[' {
+            continue;
+        }
+        let sub = &s[i..];
+        let value: JsonValue = match serde_json::from_str(sub) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if let Ok(p) = serde_json::from_value::<Plan>(value.clone()) {
+            return Ok(p);
+        }
+        if let Ok(step) = serde_json::from_value::<PlanStep>(value.clone()) {
+            return Ok(Plan { steps: vec![step] });
+        }
+        if let Ok(steps) = serde_json::from_value::<Vec<PlanStep>>(value.clone()) {
+            return Ok(Plan { steps });
+        }
+        if let Some(steps_v) = value.get("steps") {
+            if let Ok(steps) = serde_json::from_value::<Vec<PlanStep>>(steps_v.clone()) {
+                return Ok(Plan { steps });
+            }
+        }
+    }
+
+    let trimmed = s.trim();
+    let snippet = truncate(trimmed, 240);
+    Err(LoreleiError::validation(format!(
+        "invalid Plan JSON: could not find plan in output; snippet={snippet:?}"
+    )))
 }
 
 fn join_chunks(chunks: &[SongChunk]) -> String {

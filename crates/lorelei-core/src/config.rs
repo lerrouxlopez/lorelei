@@ -56,9 +56,15 @@ impl ApiKeySource {
         match self {
             ApiKeySource::Literal { value } => Ok(value.clone()),
             ApiKeySource::Env { var } => {
-                let v = env::var(var).map_err(|_| {
-                    LoreleiError::validation(format!("missing API key env var `{var}`"))
-                })?;
+                if var == "LORELEI_LOCAL_API_KEY" {
+                    // Local OpenAI-compatible endpoints often do not require auth.
+                    // Treat missing/empty key as "no auth".
+                    let v = env::var(var).unwrap_or_default();
+                    return Ok(SecretString::new(v));
+                }
+
+                let v = env::var(var)
+                    .map_err(|_| LoreleiError::validation(format!("missing API key env var `{var}`")))?;
                 if v.trim().is_empty() {
                     return Err(LoreleiError::validation(format!(
                         "API key env var `{var}` must not be empty"

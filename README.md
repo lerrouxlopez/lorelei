@@ -38,6 +38,8 @@ cp lorelei.toml.example lorelei.toml
 #   ANTHROPIC_API_KEY=...
 ```
 
+If you use the built-in `local` provider (`[providers.local] kind="local"`), make sure you have a local OpenAI-compatible server running at the configured `endpoint` (default: `http://127.0.0.1:11434/v1`).
+
 ### 2) Start the Reef
 
 ```bash
@@ -46,6 +48,10 @@ curl http://localhost:8080/healthz
 ```
 
 > Note: Harbor reads `DATABASE_URL` and `QDRANT_URL` from environment variables, not from `lorelei.toml`.
+
+`QDRANT_URL` should point to Qdrant **gRPC** (default `http://qdrant:6334` in Docker Compose).
+
+Harbor also expects the runtime prompt files to exist at `./prompts/*` inside the container image.
 
 ### 3) Run a request
 
@@ -78,6 +84,12 @@ base_url = "https://api.openai.com/v1"
 model = "gpt-4.1-mini"
 api_key = { source = "env", var = "OPENAI_API_KEY" }
 ```
+
+To use the local provider:
+
+- Set `provider = { name = "local" }`
+- Set `[echo] embedding_provider = "local"` (otherwise Echo defaults to `openai` for embeddings)
+- Ensure the `endpoint` points to a reachable server (from Harbor). In Docker, `http://127.0.0.1:11434` points to the container itself, so use `http://host.docker.internal:11434/v1` (Docker Desktop) or run Ollama inside Compose.
 
 ## Observability
 

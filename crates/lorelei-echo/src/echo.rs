@@ -95,9 +95,7 @@ impl EchoService {
                 OpenAiCompatibleConfig {
                     base_url: endpoint,
                     model,
-                    api_key: ApiKeySource::Env {
-                        var: "LORELEI_LOCAL_API_KEY".to_string(),
-                    },
+                    api_key: ApiKeySource::Env { var: "LORELEI_LOCAL_API_KEY".to_string() },
                     headers: Default::default(),
                 }
             }

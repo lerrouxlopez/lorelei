@@ -52,6 +52,14 @@ fn validate_01(name: &str, value: Option<f64>) -> Result<(), LoreleiError> {
     Ok(())
 }
 
+fn vec_string_null_to_empty<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = Option::<Vec<String>>::deserialize(deserializer)?;
+    Ok(v.unwrap_or_default())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PearlType {
@@ -64,7 +72,7 @@ pub enum PearlType {
 pub struct NewPearl {
     pub pearl_type: PearlType,
     pub content: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "vec_string_null_to_empty")]
     pub tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confidence: Option<f64>,
@@ -104,7 +112,7 @@ pub struct Pearl {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_echoed_at: Option<DateTime<Utc>>,
     pub content: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "vec_string_null_to_empty")]
     pub tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confidence: Option<f64>,

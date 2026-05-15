@@ -7,6 +7,7 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY migrations ./migrations
+COPY prompts ./prompts
 
 RUN cargo build --release -p lorelei-harbor --bin lorelei-harbor
 
@@ -30,9 +31,9 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/target/release/lorelei-harbor /usr/local/bin/lorelei-harbor
+COPY --from=builder /app/prompts /app/prompts
 
 ENV RUST_LOG=info
 EXPOSE 8080
 
 ENTRYPOINT ["lorelei-harbor"]
-
