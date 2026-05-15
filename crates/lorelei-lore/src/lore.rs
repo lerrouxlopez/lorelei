@@ -137,6 +137,38 @@ impl LoreStores {
         Ok(())
     }
 
+    pub async fn get_run(
+        &self,
+        tenant_id: Uuid,
+        run_id: Uuid,
+    ) -> Result<Option<RunRow>, LoreleiError> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, tenant_id, started_at, ended_at, metadata
+            FROM runs
+            WHERE tenant_id = $1 AND id = $2
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(run_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| LoreleiError::LoreStore {
+            message: format!("get_run failed: {e}"),
+        })?;
+
+        Ok(row.map(|r| {
+            let metadata: sqlx::types::Json<serde_json::Value> = r.get("metadata");
+            RunRow {
+                id: r.get("id"),
+                tenant_id: r.get("tenant_id"),
+                started_at: r.get("started_at"),
+                ended_at: r.get("ended_at"),
+                metadata: metadata.0,
+            }
+        }))
+    }
+
     pub async fn write_current(
         &self,
         tenant_id: Uuid,
@@ -303,6 +335,90 @@ impl LoreStores {
         })?;
 
         Ok(row.map(row_to_pearl))
+    }
+
+    pub async fn list_pearls(
+        &self,
+        tenant_id: Uuid,
+        pearl_type: Option<PearlType>,
+        include_deleted: bool,
+        limit: i64,
+    ) -> Result<Vec<Pearl>, LoreleiError> {
+        let limit = limit.clamp(1, 1000);
+
+        let rows = match (pearl_type, include_deleted) {
+            (Some(pt), true) => {
+                sqlx::query(
+                    r#"
+                    SELECT id, tenant_id, agent_id, run_id, pearl_type, content,
+                           confidence, importance, tags, created_at, deleted_at, last_echoed_at, metadata
+                    FROM pearls
+                    WHERE tenant_id = $1 AND pearl_type = $2
+                    ORDER BY created_at DESC
+                    LIMIT $3
+                    "#,
+                )
+                .bind(tenant_id)
+                .bind(pearl_type_to_db(pt))
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await
+            }
+            (Some(pt), false) => {
+                sqlx::query(
+                    r#"
+                    SELECT id, tenant_id, agent_id, run_id, pearl_type, content,
+                           confidence, importance, tags, created_at, deleted_at, last_echoed_at, metadata
+                    FROM pearls
+                    WHERE tenant_id = $1 AND pearl_type = $2 AND deleted_at IS NULL
+                    ORDER BY created_at DESC
+                    LIMIT $3
+                    "#,
+                )
+                .bind(tenant_id)
+                .bind(pearl_type_to_db(pt))
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await
+            }
+            (None, true) => {
+                sqlx::query(
+                    r#"
+                    SELECT id, tenant_id, agent_id, run_id, pearl_type, content,
+                           confidence, importance, tags, created_at, deleted_at, last_echoed_at, metadata
+                    FROM pearls
+                    WHERE tenant_id = $1
+                    ORDER BY created_at DESC
+                    LIMIT $2
+                    "#,
+                )
+                .bind(tenant_id)
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await
+            }
+            (None, false) => {
+                sqlx::query(
+                    r#"
+                    SELECT id, tenant_id, agent_id, run_id, pearl_type, content,
+                           confidence, importance, tags, created_at, deleted_at, last_echoed_at, metadata
+                    FROM pearls
+                    WHERE tenant_id = $1 AND deleted_at IS NULL
+                    ORDER BY created_at DESC
+                    LIMIT $2
+                    "#,
+                )
+                .bind(tenant_id)
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await
+            }
+        }
+        .map_err(|e| LoreleiError::LoreStore {
+            message: format!("list_pearls failed: {e}"),
+        })?;
+
+        Ok(rows.into_iter().map(row_to_pearl).collect())
     }
 
     pub async fn forget_pearl(&self, tenant_id: Uuid, pearl_id: Uuid) -> Result<(), LoreleiError> {
