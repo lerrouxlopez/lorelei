@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM rust:1.86-bookworm AS builder
+FROM rust:1.94-bookworm AS builder
 WORKDIR /app
 
 # Dependencies first for caching
@@ -11,7 +11,7 @@ COPY migrations ./migrations
 RUN cargo build --release -p lorelei-harbor --bin lorelei-harbor
 
 # Migrator image (has sqlx-cli; not meant to be minimal)
-FROM rust:1.86-bookworm AS migrator
+FROM rust:1.94-bookworm AS migrator
 WORKDIR /app
 
 RUN cargo install sqlx-cli --no-default-features --features postgres

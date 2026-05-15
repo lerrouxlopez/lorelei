@@ -31,8 +31,8 @@ model_id = "anthropic.claude-3-sonnet-20240229-v1:0"
 [providers.local]
 kind = "local"
 endpoint = "http://127.0.0.1:11434"
-model = "llama3.1"
+model = "llama3.2"
 
 [song]
-provider = { name = "openai" }
+provider = { name = "local" }
 
