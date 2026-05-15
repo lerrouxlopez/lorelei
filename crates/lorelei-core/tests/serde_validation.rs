@@ -152,8 +152,12 @@ fn validation_rejects_empty_strings_and_bad_ranges() {
 
     assert!(EchoQuery {
         text: "x".to_string(),
+        tenant_id: Uuid::new_v4(),
+        agent_id: None,
         run_id: None,
-        limit: 0
+        pearl_type: None,
+        min_confidence: None,
+        limit: 0,
     }
     .validate()
     .is_err());

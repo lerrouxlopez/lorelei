@@ -171,11 +171,18 @@ impl CurrentEvent {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EchoQuery {
     pub text: String,
-    #[serde(default)]
+    pub tenant_id: Uuid,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pearl_type: Option<PearlType>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_confidence: Option<f64>,
     #[serde(default = "EchoQuery::default_limit")]
     pub limit: usize,
 }
@@ -194,6 +201,7 @@ impl EchoQuery {
                 "echo query limit must be between 1 and 1000",
             ));
         }
+        validate_01("min_confidence", self.min_confidence)?;
         Ok(())
     }
 }
