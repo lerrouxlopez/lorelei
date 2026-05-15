@@ -1470,6 +1470,20 @@ dependencies = [
 [[package]]
 name = "lorelei-eval"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "futures",
+ "lorelei-core",
+ "lorelei-siren",
+ "lorelei-song",
+ "lorelei-tide",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
+]
 
 [[package]]
 name = "lorelei-harbor"
@@ -1546,6 +1560,16 @@ dependencies = [
 [[package]]
 name = "lorelei-song"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "futures",
+ "lorelei-core",
+ "reqwest",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
 
 [[package]]
 name = "lorelei-tide"
