@@ -5,4 +5,5 @@
 #![forbid(unsafe_code)]
 
 pub mod error;
+pub mod traits;
 pub mod types;
