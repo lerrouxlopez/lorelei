@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/lorelei-core",
+  "crates/lorelei-song",
+  "crates/lorelei-lore",
+  "crates/lorelei-echo",
+  "crates/lorelei-siren",
+  "crates/lorelei-shells",
+  "crates/lorelei-tide",
+  "crates/lorelei-harbor",
+  "crates/lorelei-cli",
+  "crates/lorelei-eval",
+]
+
+[workspace.package]
+edition = "2021"
+license = "UNLICENSED"
