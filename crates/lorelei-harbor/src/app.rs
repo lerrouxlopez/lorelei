@@ -39,7 +39,17 @@ pub async fn run() -> anyhow::Result<()> {
 
 fn init_tracing() {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    let json = lorelei_core::log_json_enabled();
+
+    let fmt = tracing_subscriber::fmt().with_env_filter(filter);
+    if json {
+        fmt.json()
+            .with_current_span(true)
+            .with_span_list(true)
+            .init();
+    } else {
+        fmt.init();
+    }
 }
 
 fn build_router(state: AppState) -> Router {
@@ -66,10 +76,18 @@ fn build_router(state: AppState) -> Router {
                         "http.request",
                         method = %request.method(),
                         uri = %request.uri(),
+                        status = tracing::field::Empty,
                     )
                 })
                 .on_request(())
-                .on_response(()),
+                .on_response(|response: &Response, latency: std::time::Duration, span: &tracing::Span| {
+                    span.record("status", response.status().as_u16());
+                    tracing::info!(
+                        parent: span,
+                        latency_ms = latency.as_millis() as u64,
+                        "http.response"
+                    );
+                }),
         )
         .with_state(Arc::new(state))
 }

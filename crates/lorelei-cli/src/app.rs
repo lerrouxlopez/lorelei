@@ -7,11 +7,13 @@ use dotenvy::dotenv;
 use lorelei_core::{Config as CoreConfig, NewPearl, PearlType};
 use owo_colors::OwoColorize;
 use serde_json::json;
+use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
 pub async fn run() -> Result<()> {
     // Load .env if present; do not error if missing.
     let _ = dotenv();
+    init_tracing();
 
     let cli = Cli::parse();
     match cli.command {
@@ -25,6 +27,21 @@ pub async fn run() -> Result<()> {
         Commands::Reef { command } => cmd_reef(command).await,
         Commands::Ship => cmd_ship().await,
         Commands::Doctor => cmd_doctor().await,
+    }
+}
+
+fn init_tracing() {
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let json = lorelei_core::log_json_enabled();
+
+    let fmt = tracing_subscriber::fmt().with_env_filter(filter);
+    if json {
+        fmt.json()
+            .with_current_span(true)
+            .with_span_list(true)
+            .init();
+    } else {
+        fmt.init();
     }
 }
 

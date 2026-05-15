@@ -6,6 +6,7 @@ use jsonschema::Validator;
 use lorelei_core::{LoreleiError, ShellCall, ShellResult, ShellRisk};
 use serde_json::{json, Value as JsonValue};
 use sqlx::PgPool;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -104,8 +105,18 @@ impl ShellRegistryPg {
         call.validate()?;
 
         let spec = self.shells[shell_name].clone();
+        let risk = spec.risk();
         let schema = spec.schema();
         validate_schema(&schema, &input)?;
+
+        let start = std::time::Instant::now();
+        info!(
+            tenant_id = %tenant_id,
+            run_id = %run_id,
+            shell_name,
+            shell_risk = ?risk,
+            "shell.call_start"
+        );
 
         // Write shell_calls row with input first (output filled after).
         let id = Uuid::new_v4();
@@ -126,6 +137,27 @@ impl ShellRegistryPg {
         })?;
 
         let result = spec.execute(call, input).await;
+
+        match &result {
+            Ok(r) => info!(
+                tenant_id = %tenant_id,
+                run_id = %run_id,
+                shell_name,
+                shell_risk = ?risk,
+                exit_code = r.exit_code,
+                latency_ms = start.elapsed().as_millis() as u64,
+                "shell.call_end"
+            ),
+            Err(e) => warn!(
+                tenant_id = %tenant_id,
+                run_id = %run_id,
+                shell_name,
+                shell_risk = ?risk,
+                latency_ms = start.elapsed().as_millis() as u64,
+                error = %e,
+                "shell.call_error"
+            ),
+        }
 
         // Persist output (even on error, store error info without secrets).
         let output = match &result {

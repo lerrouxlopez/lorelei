@@ -13,7 +13,7 @@ use lorelei_shells::ShellRegistryPg;
 use lorelei_siren::{DeterministicSirenPolicy, SirenConfig, SirenPrompt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
-use tracing::{info_span, Instrument};
+use tracing::{info, info_span, Instrument};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -174,6 +174,9 @@ impl<L: LoreRuntime, E: EchoRuntime, S: SongProvider> TideEngine<L, E, S> {
             .await?;
         let run_id = run.id;
 
+        let run_span = info_span!("tide.run", run_id = %run_id, tenant_id = %tenant_id, agent_id = ?agent_id);
+        let _run_guard = run_span.enter();
+
         self.write_user_event(tenant_id, run_id, &user_text)
             .instrument(info_span!("tide.write_user_current"))
             .await?;
@@ -191,6 +194,12 @@ impl<L: LoreRuntime, E: EchoRuntime, S: SongProvider> TideEngine<L, E, S> {
             })
             .instrument(info_span!("tide.echo"))
             .await?;
+
+        info!(
+            echo_query_count = 1u64,
+            echo_hit_count = echoes.len() as u64,
+            "tide.echo_summary"
+        );
 
         let plan = self
             .plan(tenant_id, agent_id, run_id, &user_text, &echoes)
@@ -318,6 +327,13 @@ impl<L: LoreRuntime, E: EchoRuntime, S: SongProvider> TideEngine<L, E, S> {
     ) -> Result<String, LoreleiError> {
         self.shells.validate_name(shell_name)?;
         let risk = self.shells.risk(shell_name)?;
+        info!(
+            tenant_id = %tenant_id,
+            run_id = %run_id,
+            shell_name,
+            shell_risk = ?risk,
+            "tide.shell_classified"
+        );
 
         let action = ProposedAction {
             tenant_id,
@@ -335,6 +351,14 @@ impl<L: LoreRuntime, E: EchoRuntime, S: SongProvider> TideEngine<L, E, S> {
         };
 
         let decision = self.siren.decide(action.clone()).await?;
+        info!(
+            tenant_id = %tenant_id,
+            run_id = %run_id,
+            shell_name,
+            shell_risk = ?decision.risk,
+            siren_allow = decision.allow,
+            "tide.siren_decision"
+        );
         self.write_shell_or_answer_event(
             tenant_id,
             run_id,

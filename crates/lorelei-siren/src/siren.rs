@@ -3,6 +3,7 @@ use std::path::Path;
 use async_trait::async_trait;
 use lorelei_core::{LoreleiError, ProposedAction, ShellRisk, SirenDecision, SirenPolicy};
 use serde::{Deserialize, Serialize};
+use tracing::info;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SirenConfig {
@@ -129,9 +130,19 @@ impl DeterministicSirenPolicy {
 impl SirenPolicy for DeterministicSirenPolicy {
     async fn decide(&self, action: ProposedAction) -> Result<SirenDecision, LoreleiError> {
         action.validate()?;
+        let start = std::time::Instant::now();
 
         // Deterministic checks first.
         let decision = self.decide_deterministic(&action);
+        info!(
+            tenant_id = %action.tenant_id,
+            target_tenant_id = %action.target_tenant_id,
+            shell_name = %action.call.program,
+            shell_risk = ?decision.risk,
+            siren_allow = decision.allow,
+            latency_ms = start.elapsed().as_millis() as u64,
+            "siren.decision"
+        );
         if !decision.allow {
             return Ok(decision);
         }

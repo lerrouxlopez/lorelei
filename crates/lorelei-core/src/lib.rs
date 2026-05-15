@@ -1,5 +1,6 @@
 pub mod core;
 pub mod config;
+pub mod observability;
 
 pub use crate::core::{
     CurrentEvent, CurrentStore, EchoHit, EchoQuery, EchoRetriever, LoreStore, LoreleiError,
@@ -13,3 +14,5 @@ pub use crate::config::{
     OpenAiCompatibleConfig, ProviderConfig, ProviderKind, ProviderRef, SecretString,
     SongProviderConfig,
 };
+
+pub use crate::observability::{log_json_enabled, log_prompts_enabled};

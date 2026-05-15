@@ -1,5 +1,5 @@
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use futures::stream::{self, BoxStream};
@@ -10,6 +10,7 @@ use lorelei_core::{
 use reqwest::{header, StatusCode};
 use serde_json::{json, Value as JsonValue};
 use tokio::time::sleep;
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -25,28 +26,34 @@ pub fn build_song_provider(cfg: &Config) -> Result<Provider, LoreleiError> {
     let song = cfg.song.as_ref().ok_or_else(|| {
         LoreleiError::validation("missing [song] section in config (song.provider.name required)")
     })?;
-    let name = &song.provider.name;
-    let provider_cfg = cfg.providers.get(name).ok_or_else(|| {
+    let name = song.provider.name.clone();
+    let provider_cfg = cfg.providers.get(&name).ok_or_else(|| {
         LoreleiError::validation(format!("song.provider.name `{name}` not found in [providers]"))
     })?;
 
     match provider_cfg {
         ProviderConfig::OpenAiCompatible(p) => {
-            Ok(Provider::OpenAiCompatible(OpenAiCompatibleProvider::new(p.clone())?))
+            Ok(Provider::OpenAiCompatible(OpenAiCompatibleProvider::new(
+                name.clone(),
+                p.clone(),
+            )?))
         }
         ProviderConfig::Local(p) => {
             let endpoint = p.endpoint.clone().ok_or_else(|| LoreleiError::validation("local provider requires `endpoint`"))?;
             let model = p.model.clone().ok_or_else(|| LoreleiError::validation("local provider requires `model`"))?;
-            Ok(Provider::OpenAiCompatible(OpenAiCompatibleProvider::new(OpenAiCompatibleConfig {
-                base_url: endpoint,
-                model,
-                api_key: ApiKeySource::Env { var: "LORELEI_LOCAL_API_KEY".to_string() },
-                headers: Default::default(),
-            })?))
+            Ok(Provider::OpenAiCompatible(OpenAiCompatibleProvider::new(
+                name.clone(),
+                OpenAiCompatibleConfig {
+                    base_url: endpoint,
+                    model,
+                    api_key: ApiKeySource::Env { var: "LORELEI_LOCAL_API_KEY".to_string() },
+                    headers: Default::default(),
+                },
+            )?))
         }
-        ProviderConfig::Anthropic(p) => Ok(Provider::Anthropic(AnthropicProvider::new(p.clone())?)),
-        ProviderConfig::Bedrock(p) => Ok(Provider::Bedrock(BedrockProviderStub::new(p.clone())?)),
-        ProviderConfig::GeminiNative(p) => Ok(Provider::Gemini(GeminiProviderStub::new(p.clone())?)),
+        ProviderConfig::Anthropic(p) => Ok(Provider::Anthropic(AnthropicProvider::new(name.clone(), p.clone())?)),
+        ProviderConfig::Bedrock(p) => Ok(Provider::Bedrock(BedrockProviderStub::new(name.clone(), p.clone())?)),
+        ProviderConfig::GeminiNative(p) => Ok(Provider::Gemini(GeminiProviderStub::new(name, p.clone())?)),
     }
 }
 
@@ -88,14 +95,15 @@ impl SongProvider for Provider {
 
 #[derive(Clone)]
 pub struct OpenAiCompatibleProvider {
+    name: String,
     cfg: OpenAiCompatibleConfig,
     client: reqwest::Client,
 }
 
 impl OpenAiCompatibleProvider {
-    pub fn new(cfg: OpenAiCompatibleConfig) -> Result<Self, LoreleiError> {
+    pub fn new(name: String, cfg: OpenAiCompatibleConfig) -> Result<Self, LoreleiError> {
         cfg.validate()?;
-        Ok(Self { cfg, client: reqwest::Client::new() })
+        Ok(Self { name, cfg, client: reqwest::Client::new() })
     }
 
     fn base_url(&self, path: &str) -> String {
@@ -141,6 +149,7 @@ impl SongProvider for OpenAiCompatibleProvider {
 
     async fn song(&self, request: SongRequest) -> Result<SongResponse, LoreleiError> {
         request.validate()?;
+        let start = Instant::now();
         let url = self.base_url("/chat/completions");
         let auth = self.auth_header()?;
         let body = json!({
@@ -149,14 +158,50 @@ impl SongProvider for OpenAiCompatibleProvider {
           "stream": false
         });
 
+        if lorelei_core::log_prompts_enabled() {
+            debug!(
+                provider_name = %self.name,
+                model = %self.cfg.model,
+                prompt = %request.prompt,
+                "song.prompt"
+            );
+        } else {
+            debug!(
+                provider_name = %self.name,
+                model = %self.cfg.model,
+                prompt_len = request.prompt.len(),
+                "song.prompt"
+            );
+        }
+
         let resp = self.send_retry(|| {
             self.client.post(url.clone()).header(header::AUTHORIZATION, auth.clone()).json(&body)
         }).await?;
 
         if !resp.status().is_success() {
+            warn!(
+                provider_name = %self.name,
+                model = %self.cfg.model,
+                status = %resp.status(),
+                latency_ms = start.elapsed().as_millis() as u64,
+                "song.http_error"
+            );
             return Err(LoreleiError::SongProvider { message: format!("http {}", resp.status()) });
         }
         let v: JsonValue = resp.json().await.map_err(|e| LoreleiError::SongProvider { message: e.to_string() })?;
+        let usage = v.get("usage");
+        let prompt_tokens = usage.and_then(|u| u.get("prompt_tokens")).and_then(|n| n.as_u64());
+        let completion_tokens = usage.and_then(|u| u.get("completion_tokens")).and_then(|n| n.as_u64());
+        let total_tokens = usage.and_then(|u| u.get("total_tokens")).and_then(|n| n.as_u64());
+        info!(
+            provider_name = %self.name,
+            model = %self.cfg.model,
+            latency_ms = start.elapsed().as_millis() as u64,
+            prompt_tokens = ?prompt_tokens,
+            completion_tokens = ?completion_tokens,
+            total_tokens = ?total_tokens,
+            "song.request"
+        );
         let content = v.get("choices")
             .and_then(|c| c.get(0))
             .and_then(|c| c.get("message"))
@@ -181,14 +226,15 @@ impl SongProvider for OpenAiCompatibleProvider {
 
 #[derive(Clone)]
 pub struct AnthropicProvider {
+    name: String,
     cfg: AnthropicConfig,
     client: reqwest::Client,
 }
 
 impl AnthropicProvider {
-    pub fn new(cfg: AnthropicConfig) -> Result<Self, LoreleiError> {
+    pub fn new(name: String, cfg: AnthropicConfig) -> Result<Self, LoreleiError> {
         cfg.validate()?;
-        Ok(Self { cfg, client: reqwest::Client::new() })
+        Ok(Self { name, cfg, client: reqwest::Client::new() })
     }
 }
 
@@ -206,6 +252,22 @@ impl SongProvider for AnthropicProvider {
 
     async fn song(&self, request: SongRequest) -> Result<SongResponse, LoreleiError> {
         request.validate()?;
+        let start = Instant::now();
+        if lorelei_core::log_prompts_enabled() {
+            debug!(
+                provider_name = %self.name,
+                model = %self.cfg.model,
+                prompt = %request.prompt,
+                "song.prompt"
+            );
+        } else {
+            debug!(
+                provider_name = %self.name,
+                model = %self.cfg.model,
+                prompt_len = request.prompt.len(),
+                "song.prompt"
+            );
+        }
         let key = self.cfg.api_key.resolve()?;
         let body = json!({
           "model": self.cfg.model,
@@ -220,9 +282,27 @@ impl SongProvider for AnthropicProvider {
             .await
             .map_err(|e| LoreleiError::SongProvider { message: e.to_string() })?;
         if !resp.status().is_success() {
+            warn!(
+                provider_name = %self.name,
+                model = %self.cfg.model,
+                status = %resp.status(),
+                latency_ms = start.elapsed().as_millis() as u64,
+                "song.http_error"
+            );
             return Err(LoreleiError::SongProvider { message: format!("http {}", resp.status()) });
         }
         let v: JsonValue = resp.json().await.map_err(|e| LoreleiError::SongProvider { message: e.to_string() })?;
+        let usage = v.get("usage");
+        let input_tokens = usage.and_then(|u| u.get("input_tokens")).and_then(|n| n.as_u64());
+        let output_tokens = usage.and_then(|u| u.get("output_tokens")).and_then(|n| n.as_u64());
+        info!(
+            provider_name = %self.name,
+            model = %self.cfg.model,
+            latency_ms = start.elapsed().as_millis() as u64,
+            input_tokens = ?input_tokens,
+            output_tokens = ?output_tokens,
+            "song.request"
+        );
         let content = v.get("content")
             .and_then(|c| c.as_array())
             .and_then(|a| a.first())
@@ -246,13 +326,14 @@ impl SongProvider for AnthropicProvider {
 
 #[derive(Clone)]
 pub struct BedrockProviderStub {
+    name: String,
     _cfg: lorelei_core::BedrockConfig,
 }
 
 impl BedrockProviderStub {
-    pub fn new(cfg: lorelei_core::BedrockConfig) -> Result<Self, LoreleiError> {
+    pub fn new(name: String, cfg: lorelei_core::BedrockConfig) -> Result<Self, LoreleiError> {
         cfg.validate()?;
-        Ok(Self { _cfg: cfg })
+        Ok(Self { name, _cfg: cfg })
     }
 }
 
@@ -268,6 +349,7 @@ impl SongProvider for BedrockProviderStub {
         })
     }
     async fn song(&self, _request: SongRequest) -> Result<SongResponse, LoreleiError> {
+        warn!(provider_name=%self.name, "song.stub_provider");
         Err(LoreleiError::SongProvider { message: "bedrock provider stub: TODO implement SigV4 + InvokeModel".to_string() })
     }
     async fn song_stream(&self, _request: SongRequest) -> Result<BoxStream<'static, Result<SongChunk, LoreleiError>>, LoreleiError> {
@@ -277,13 +359,14 @@ impl SongProvider for BedrockProviderStub {
 
 #[derive(Clone)]
 pub struct GeminiProviderStub {
+    name: String,
     _cfg: lorelei_core::GeminiNativeConfig,
 }
 
 impl GeminiProviderStub {
-    pub fn new(cfg: lorelei_core::GeminiNativeConfig) -> Result<Self, LoreleiError> {
+    pub fn new(name: String, cfg: lorelei_core::GeminiNativeConfig) -> Result<Self, LoreleiError> {
         cfg.validate()?;
-        Ok(Self { _cfg: cfg })
+        Ok(Self { name, _cfg: cfg })
     }
 }
 
@@ -299,6 +382,7 @@ impl SongProvider for GeminiProviderStub {
         })
     }
     async fn song(&self, _request: SongRequest) -> Result<SongResponse, LoreleiError> {
+        warn!(provider_name=%self.name, "song.stub_provider");
         Err(LoreleiError::SongProvider { message: "gemini native provider stub: TODO implement auth + generateContent".to_string() })
     }
     async fn song_stream(&self, _request: SongRequest) -> Result<BoxStream<'static, Result<SongChunk, LoreleiError>>, LoreleiError> {

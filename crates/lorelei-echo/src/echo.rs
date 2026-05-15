@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -11,6 +11,7 @@ use reqwest::{header, StatusCode};
 use serde_json::{json, Value as JsonValue};
 use thiserror::Error;
 use tokio::time::sleep;
+use tracing::{info, warn};
 
 #[derive(Debug, Error)]
 pub enum LoreleiEchoError {
@@ -128,6 +129,7 @@ impl EchoService {
 
     pub async fn retrieve(&self, q: EchoQuery) -> Result<Vec<EchoHit>, LoreleiError> {
         q.validate()?;
+        let start = Instant::now();
 
         // 1) Rewrite user goal into retrieval queries (placeholder: single query).
         let queries = vec![q.text.clone()];
@@ -190,6 +192,15 @@ impl EchoService {
         // 7) Return EchoHit list.
         hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
         hits.truncate(q.limit);
+
+        info!(
+            tenant_id = %q.tenant_id,
+            agent_id = ?q.agent_id,
+            echo_query_count = 1u64,
+            echo_hit_count = hits.len() as u64,
+            latency_ms = start.elapsed().as_millis() as u64,
+            "echo.retrieve"
+        );
         Ok(hits)
     }
 }
@@ -260,6 +271,7 @@ impl OpenAiCompatibleEmbedder {
         let mut attempt = 0u32;
         let mut delay = Duration::from_millis(200);
         loop {
+            let start = Instant::now();
             let mut b = self
                 .client
                 .post(url.clone())
@@ -292,11 +304,22 @@ impl OpenAiCompatibleEmbedder {
             if !resp.status().is_success() {
                 let status = resp.status();
                 let text = resp.text().await.unwrap_or_default();
+                warn!(
+                    model = %self.cfg.model,
+                    status = %status,
+                    latency_ms = start.elapsed().as_millis() as u64,
+                    "echo.embedding_http_error"
+                );
                 return Err(LoreleiError::EchoRetriever {
                     message: format!("embedding failed: HTTP {status}: {}", truncate(&text, 400)),
                 });
             }
 
+            info!(
+                model = %self.cfg.model,
+                latency_ms = start.elapsed().as_millis() as u64,
+                "echo.embedding_request"
+            );
             return resp.json().await.map_err(|e| LoreleiError::EchoRetriever {
                 message: format!("embedding invalid JSON: {e}"),
             });

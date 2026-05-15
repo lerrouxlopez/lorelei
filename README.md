@@ -47,3 +47,11 @@ curl http://localhost:8080/healthz
 ```
 
 > Note: Harbor reads `DATABASE_URL` and `QDRANT_URL` from environment variables, not from `lorelei.toml`.
+
+## Observability
+
+Lorelei uses `tracing` for structured logs.
+
+- `RUST_LOG=info` (or `debug`, etc.) controls log level.
+- `LORELEI_LOG_JSON=true` enables JSON log output (recommended for containers).
+- `LORELEI_LOG_PROMPTS=true` allows logging full prompts (off by default; avoid in production).
