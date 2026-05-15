@@ -45,3 +45,5 @@ cp lorelei.toml.example lorelei.toml
 docker compose up --build
 curl http://localhost:8080/healthz
 ```
+
+> Note: Harbor reads `DATABASE_URL` and `QDRANT_URL` from environment variables, not from `lorelei.toml`.

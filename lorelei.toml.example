@@ -3,6 +3,7 @@
 # Notes:
 # - Prefer `source = "env"` for secrets. Lorelei redacts secrets in Debug/Display.
 # - Keep this file out of logs and never commit real secrets.
+# - `DATABASE_URL` and `QDRANT_URL` are loaded from environment variables at runtime.
 
 [providers.openai]
 kind = "openai-compatible"

@@ -30,7 +30,7 @@ pub async fn run() -> anyhow::Result<()> {
     let state = AppState::new(cfg).await?;
     let app = build_router(state);
 
-    let addr: SocketAddr = "127.0.0.1:8080".parse().unwrap();
+    let addr: SocketAddr = "0.0.0.0:8080".parse().unwrap();
     info!(%addr, "lorelei-harbor listening");
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
@@ -126,7 +126,9 @@ impl AppState {
 struct HarborConfig {
     #[serde(flatten)]
     core: CoreConfig,
+    #[serde(default)]
     database_url: String,
+    #[serde(default)]
     qdrant_url: String,
     #[serde(default)]
     lore: LoreSection,
