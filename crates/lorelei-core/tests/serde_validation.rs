@@ -74,6 +74,7 @@ fn serde_roundtrip_song_request_response_chunk() {
         index: 0,
         content: "la".to_string(),
         is_final: true,
+        tool_calls: vec![],
     };
     chunk.validate().unwrap();
 
