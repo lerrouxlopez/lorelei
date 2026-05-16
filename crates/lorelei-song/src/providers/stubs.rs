@@ -1,9 +1,11 @@
 #![forbid(unsafe_code)]
 
+use futures::stream::BoxStream;
 use lorelei_core::error::LoreleiError;
 use lorelei_core::traits::SongProvider;
-use lorelei_core::types::{EmbeddingRequest, EmbeddingResponse, ProviderCapabilities, SongChunk, SongRequest, SongResponse};
-use futures::stream::BoxStream;
+use lorelei_core::types::{
+    EmbeddingRequest, EmbeddingResponse, ProviderCapabilities, SongChunk, SongRequest, SongResponse,
+};
 
 pub struct UnsupportedProvider {
     pub name: String,
@@ -24,7 +26,10 @@ impl SongProvider for UnsupportedProvider {
         )))
     }
 
-    async fn stream(&self, _request: SongRequest) -> Result<BoxStream<'static, SongChunk>, LoreleiError> {
+    async fn stream(
+        &self,
+        _request: SongRequest,
+    ) -> Result<BoxStream<'static, SongChunk>, LoreleiError> {
         Err(LoreleiError::Unsupported(format!(
             "provider `{}` ({}) streaming is not implemented yet",
             self.name, self.kind
@@ -38,4 +43,3 @@ impl SongProvider for UnsupportedProvider {
         )))
     }
 }
-

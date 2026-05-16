@@ -3,11 +3,13 @@
 use crate::providers::mock::MockSongProvider;
 use crate::providers::openai_compatible::OpenAiCompatibleProvider;
 use crate::providers::stubs::UnsupportedProvider;
+use futures::stream::BoxStream;
 use lorelei_core::config::{LoreleiConfig, ProviderKind};
 use lorelei_core::error::LoreleiError;
 use lorelei_core::traits::SongProvider;
-use lorelei_core::types::{EmbeddingRequest, EmbeddingResponse, ProviderCapabilities, SongChunk, SongRequest, SongResponse};
-use futures::stream::BoxStream;
+use lorelei_core::types::{
+    EmbeddingRequest, EmbeddingResponse, ProviderCapabilities, SongChunk, SongRequest, SongResponse,
+};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -30,7 +32,10 @@ impl ProviderRegistry {
                     let api_key = std::env::var(&p.api_key_env).map_err(|_| {
                         LoreleiError::validation(
                             "providers.<name>.api_key_env",
-                            format!("missing required env var (value not shown): {}", p.api_key_env),
+                            format!(
+                                "missing required env var (value not shown): {}",
+                                p.api_key_env
+                            ),
                         )
                     })?;
 
@@ -96,6 +101,10 @@ impl ProviderRegistry {
         Ok(Self { providers })
     }
 
+    pub fn from_providers(providers: BTreeMap<String, Arc<dyn SongProvider>>) -> Self {
+        Self { providers }
+    }
+
     pub fn get(&self, name: &str) -> Result<Arc<dyn SongProvider>, LoreleiError> {
         self.providers
             .get(name)
@@ -156,7 +165,9 @@ impl ProviderRegistry {
                 }
             }
         }
-        Err(last_err.unwrap_or_else(|| LoreleiError::Unsupported("no embedding providers available".to_string())))
+        Err(last_err.unwrap_or_else(|| {
+            LoreleiError::Unsupported("no embedding providers available".to_string())
+        }))
     }
 
     pub async fn stream_with_fallback(
@@ -184,15 +195,18 @@ impl ProviderRegistry {
                 }
             }
         }
-        Err(last_err.unwrap_or_else(|| LoreleiError::Unsupported("no streaming providers available".to_string())))
+        Err(last_err.unwrap_or_else(|| {
+            LoreleiError::Unsupported("no streaming providers available".to_string())
+        }))
     }
 }
 
 fn is_retryable_error(err: &LoreleiError) -> bool {
     match err {
-        LoreleiError::Provider(msg) => msg.contains("http 429") || msg.contains("http 5") || msg.contains("request failed"),
+        LoreleiError::Provider(msg) => {
+            msg.contains("http 429") || msg.contains("http 5") || msg.contains("request failed")
+        }
         LoreleiError::Internal(msg) => msg.contains("timeout"),
         _ => false,
     }
 }
-

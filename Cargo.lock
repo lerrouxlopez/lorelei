@@ -1240,6 +1240,17 @@ version = "0.1.0"
 [[package]]
 name = "lorelei-song"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures",
+ "log",
+ "lorelei-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
 
 [[package]]
 name = "lorelei-tide"

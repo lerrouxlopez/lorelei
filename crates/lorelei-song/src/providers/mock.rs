@@ -4,11 +4,8 @@ use futures::stream::{self, BoxStream};
 use lorelei_core::error::LoreleiError;
 use lorelei_core::traits::SongProvider;
 use lorelei_core::types::{
-    EmbeddingRequest, EmbeddingResponse, NormalizedToolCall, ProviderCapabilities, SongChunk,
-    SongRequest, SongResponse,
+    EmbeddingRequest, EmbeddingResponse, ProviderCapabilities, SongChunk, SongRequest, SongResponse,
 };
-use serde_json::json;
-use uuid::Uuid;
 
 #[derive(Default)]
 pub struct MockSongProvider {
@@ -64,7 +61,10 @@ impl SongProvider for MockSongProvider {
         })
     }
 
-    async fn stream(&self, request: SongRequest) -> Result<BoxStream<'static, SongChunk>, LoreleiError> {
+    async fn stream(
+        &self,
+        request: SongRequest,
+    ) -> Result<BoxStream<'static, SongChunk>, LoreleiError> {
         if !self.capabilities.supports_streaming {
             return Err(LoreleiError::Unsupported(
                 "provider does not support streaming".to_string(),
@@ -105,4 +105,3 @@ impl SongProvider for MockSongProvider {
         })
     }
 }
-

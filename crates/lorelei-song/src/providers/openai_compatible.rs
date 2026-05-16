@@ -73,10 +73,9 @@ impl OpenAiCompatibleProvider {
             match res {
                 Ok(resp) => {
                     if resp.status().is_success() {
-                        let parsed = resp
-                            .json::<TResp>()
-                            .await
-                            .map_err(|e| LoreleiError::Provider(format!("invalid response: {e}")))?;
+                        let parsed = resp.json::<TResp>().await.map_err(|e| {
+                            LoreleiError::Provider(format!("invalid response: {e}"))
+                        })?;
                         return Ok(parsed);
                     }
                     if is_retryable_status(resp.status()) && attempt < 5 {
@@ -146,7 +145,10 @@ impl SongProvider for OpenAiCompatibleProvider {
         })
     }
 
-    async fn stream(&self, request: SongRequest) -> Result<BoxStream<'static, SongChunk>, LoreleiError> {
+    async fn stream(
+        &self,
+        request: SongRequest,
+    ) -> Result<BoxStream<'static, SongChunk>, LoreleiError> {
         if !self.capabilities.supports_streaming {
             return Err(LoreleiError::Unsupported(
                 "provider does not support streaming".to_string(),
@@ -179,12 +181,13 @@ impl SongProvider for OpenAiCompatibleProvider {
                 "provider does not support embeddings".to_string(),
             ));
         }
-        let model = self.embedding_model.clone().ok_or_else(|| {
-            LoreleiError::Validation {
+        let model = self
+            .embedding_model
+            .clone()
+            .ok_or_else(|| LoreleiError::Validation {
                 field: "providers.<name>.embedding_model",
                 message: "embedding_model is required for embeddings".to_string(),
-            }
-        })?;
+            })?;
 
         let url = format!("{}/v1/embeddings", self.base_url);
         let body = EmbeddingsRequest {
@@ -251,9 +254,6 @@ struct ChatMessageOut {
 struct OpenAiToolCall {
     #[serde(default)]
     id: Option<String>,
-    #[serde(rename = "type")]
-    #[serde(default)]
-    tool_type: Option<String>,
     function: OpenAiToolFunction,
 }
 
@@ -294,4 +294,3 @@ struct EmbeddingsResponse {
 struct EmbeddingDatum {
     embedding: Vec<f32>,
 }
-
