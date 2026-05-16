@@ -253,10 +253,11 @@ pub struct EmbeddingResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ProviderCapabilities {
-    pub streaming: bool,
-    pub tool_calls: bool,
-    pub embeddings: bool,
-    pub max_output_tokens: Option<u32>,
+    pub supports_streaming: bool,
+    pub supports_tools: bool,
+    pub supports_json_mode: bool,
+    pub supports_embeddings: bool,
+    pub context_window: Option<u32>,
     pub metadata: BTreeMap<String, Value>,
 }
 

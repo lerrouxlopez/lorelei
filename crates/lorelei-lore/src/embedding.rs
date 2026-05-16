@@ -33,7 +33,7 @@ impl<P: SongProvider> EmbeddingProvider for SongProviderEmbeddingAdapter<P> {
         provider: &str,
         inputs: Vec<String>,
     ) -> Result<EmbeddingResponse, LoreleiError> {
-        if !self.provider.capabilities().embeddings {
+        if !self.provider.capabilities().supports_embeddings {
             return Err(LoreleiError::Unsupported(
                 "provider does not support embeddings".to_string(),
             ));
