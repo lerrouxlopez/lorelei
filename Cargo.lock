@@ -1846,6 +1846,16 @@ dependencies = [
 [[package]]
 name = "lorelei-siren"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "lorelei-core",
+ "lorelei-tide",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
 
 [[package]]
 name = "lorelei-song"
@@ -1865,6 +1875,14 @@ dependencies = [
 [[package]]
 name = "lorelei-tide"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "lorelei-core",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
 
 [[package]]
 name = "lru-slab"

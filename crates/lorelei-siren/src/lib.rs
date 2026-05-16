@@ -1,6 +1,7 @@
-//! Provider-agnostic LLM interface ("The Siren") scaffolding.
+//! Safety policy ("The Siren").
+//!
+//! Deterministic checks must run before any LLM-based policy evaluation.
 
 #![forbid(unsafe_code)]
 
-pub mod client;
-pub mod types;
+pub mod policy;

@@ -333,9 +333,16 @@ pub struct ProposedAction {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SirenDecision {
-    Allow { reasoning_summary: String },
-    Deny { reasoning_summary: String },
-    RequireReview { reasoning_summary: String },
+    Allow {
+        reasoning_summary: String,
+    },
+    Deny {
+        reasoning_summary: String,
+    },
+    RequireApproval {
+        reasoning_summary: String,
+        approval_prompt: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
