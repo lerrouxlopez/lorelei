@@ -6,13 +6,26 @@ license.workspace = true
 
 [dependencies]
 async-trait = "0.1"
+axum = "0.7"
+dotenvy = "0.15"
+lorelei-echo = { path = "../lorelei-echo" }
 lorelei-core = { path = "../lorelei-core" }
+lorelei-lore = { path = "../lorelei-lore" }
+lorelei-song = { path = "../lorelei-song" }
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "chrono", "uuid", "json", "macros", "migrate"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
+tower-http = { version = "0.6", features = ["trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+qdrant-client = "1.18"
 
 [[bin]]
 name = "lorelei-harbor"
 path = "src/main.rs"
+
+[dev-dependencies]
+tower = "0.5"

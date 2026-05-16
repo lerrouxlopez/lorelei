@@ -48,6 +48,39 @@ impl<P: SongProvider> EmbeddingProvider for SongProviderEmbeddingAdapter<P> {
     }
 }
 
+pub struct DynSongProviderEmbeddingAdapter {
+    provider: std::sync::Arc<dyn SongProvider>,
+}
+
+impl DynSongProviderEmbeddingAdapter {
+    pub fn new(provider: std::sync::Arc<dyn SongProvider>) -> Self {
+        Self { provider }
+    }
+}
+
+#[async_trait]
+impl EmbeddingProvider for DynSongProviderEmbeddingAdapter {
+    async fn embed(
+        &self,
+        tenant_id: TenantId,
+        provider: &str,
+        inputs: Vec<String>,
+    ) -> Result<EmbeddingResponse, LoreleiError> {
+        if !self.provider.capabilities().supports_embeddings {
+            return Err(LoreleiError::Unsupported(
+                "provider does not support embeddings".to_string(),
+            ));
+        }
+        self.provider
+            .embed(EmbeddingRequest {
+                tenant_id,
+                provider: provider.to_string(),
+                inputs,
+            })
+            .await
+    }
+}
+
 pub struct DeterministicMockEmbeddingProvider {
     dims: usize,
 }
