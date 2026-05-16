@@ -11,8 +11,6 @@ use std::process::Command as ProcessCommand;
 use uuid::Uuid;
 
 pub async fn run(cli: Cli) -> i32 {
-    let _ = dotenvy::dotenv();
-
     match cli.command {
         Command::Init(args) => match cmd_init(args) {
             Ok(()) => 0,
@@ -107,6 +105,13 @@ pub async fn run(cli: Cli) -> i32 {
         },
         Command::Ship(args) => match cmd_ship(args) {
             Ok(code) => code,
+            Err(e) => {
+                eprintln!("{e}");
+                1
+            }
+        },
+        Command::Run(args) => match cmd_run(args).await {
+            Ok(()) => 0,
             Err(e) => {
                 eprintln!("{e}");
                 1
@@ -642,6 +647,99 @@ fn cmd_ship(args: ShipArgs) -> Result<i32, String> {
     }
 
     Ok(code)
+}
+
+#[derive(Debug, Deserialize)]
+struct CurrentEventResponse {
+    event_id: uuid::Uuid,
+    tenant_id: uuid::Uuid,
+    agent_id: uuid::Uuid,
+    run_id: uuid::Uuid,
+    event_type: lorelei_core::types::CurrentEventType,
+    created_at: chrono::DateTime<chrono::Utc>,
+    summary: String,
+    data: serde_json::Value,
+}
+
+async fn cmd_run(args: RunArgs) -> Result<(), String> {
+    let cfg = LoreleiConfig::load_from_toml_path(&args.config.config)
+        .map_err(|e| format!("config error: {e}"))?;
+    let harbor = HarborClient::new(HarborClient::default_base_url(args.harbor.harbor_url))?;
+    let tenant = cfg.agent.tenant_id.0;
+    let agent = cfg.agent.agent_id.0;
+
+    match args.command {
+        RunCommand::Inspect(r) => {
+            let path = format!(
+                "/v1/runs/{}?tenant_id={}&agent_id={}",
+                r.run_id, tenant, agent
+            );
+            let run: RunResponse = harbor.get_json(&path).await.map_err(|e| e.to_string())?;
+            println!(
+                "run {}\tstatus={:?}\ttenant={}\tagent={}",
+                run.run_id, run.status, run.tenant_id, run.agent_id
+            );
+        }
+        RunCommand::Currents(r) => {
+            let path = format!(
+                "/v1/runs/{}/currents?tenant_id={}&agent_id={}",
+                r.run_id, tenant, agent
+            );
+            let events: Vec<CurrentEventResponse> =
+                harbor.get_json(&path).await.map_err(|e| e.to_string())?;
+            for e in events {
+                println!(
+                    "{}\t{:?}\t{}",
+                    e.created_at.to_rfc3339(),
+                    e.event_type,
+                    e.summary
+                );
+            }
+        }
+        RunCommand::Memories(r) => {
+            let path = format!(
+                "/v1/runs/{}/currents?tenant_id={}&agent_id={}",
+                r.run_id, tenant, agent
+            );
+            let events: Vec<CurrentEventResponse> =
+                harbor.get_json(&path).await.map_err(|e| e.to_string())?;
+
+            let mut pearl_ids: Vec<String> = Vec::new();
+            for e in events {
+                if e.summary != "memory formation" {
+                    continue;
+                }
+                if let Some(accepted) = e
+                    .data
+                    .get("decisions")
+                    .and_then(|d| d.get("accepted"))
+                    .and_then(|a| a.as_array())
+                {
+                    for a in accepted {
+                        if let Some(id) = a.get("pearl_id").and_then(|v| v.as_str()) {
+                            pearl_ids.push(id.to_string());
+                        }
+                    }
+                }
+            }
+            pearl_ids.sort();
+            pearl_ids.dedup();
+
+            if pearl_ids.is_empty() {
+                println!("(no accepted Pearls recorded for this run)");
+                return Ok(());
+            }
+
+            for pid in pearl_ids {
+                let p = format!("/v1/pearls/{pid}?tenant_id={tenant}");
+                let pearl: PearlResponse =
+                    harbor.get_json(&p).await.map_err(|e| e.to_string())?;
+                println!("{}\t{:?}\t{}", pearl.pearl_id, pearl.pearl_type, pearl.content);
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn run_compose(compose_file: &Path, args: &[&str]) -> Result<i32, String> {

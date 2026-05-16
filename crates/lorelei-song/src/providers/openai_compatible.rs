@@ -10,8 +10,9 @@ use lorelei_core::types::{
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::time::sleep;
+use tracing::{debug, info};
 
 pub struct OpenAiCompatibleProvider {
     pub name: String,
@@ -57,7 +58,8 @@ impl OpenAiCompatibleProvider {
         &self,
         url: String,
         body: &TReq,
-    ) -> Result<TResp, LoreleiError> {
+    ) -> Result<(TResp, u32, Duration), LoreleiError> {
+        let started = Instant::now();
         let mut attempt = 0u32;
         let mut delay_ms = 250u64;
         loop {
@@ -76,7 +78,8 @@ impl OpenAiCompatibleProvider {
                         let parsed = resp.json::<TResp>().await.map_err(|e| {
                             LoreleiError::Provider(format!("invalid response: {e}"))
                         })?;
-                        return Ok(parsed);
+                        let retries = attempt.saturating_sub(1);
+                        return Ok((parsed, retries, started.elapsed()));
                     }
                     if is_retryable_status(resp.status()) && attempt < 5 {
                         sleep(Duration::from_millis(delay_ms)).await;
@@ -114,8 +117,22 @@ impl SongProvider for OpenAiCompatibleProvider {
     async fn complete(&self, request: SongRequest) -> Result<SongResponse, LoreleiError> {
         let url = format!("{}/v1/chat/completions", self.base_url);
 
-        if !Self::log_prompts_enabled() {
-            // Intentionally do not log prompts.
+        if Self::log_prompts_enabled() {
+            debug!(
+                run_id = %request.run_id.0,
+                provider = %self.name,
+                model = %self.chat_model,
+                prompt = %request.input,
+                "song.prompt"
+            );
+        } else {
+            debug!(
+                run_id = %request.run_id.0,
+                provider = %self.name,
+                model = %self.chat_model,
+                prompt_len = request.input.len(),
+                "song.prompt_redacted"
+            );
         }
 
         let body = ChatCompletionsRequest {
@@ -130,7 +147,8 @@ impl SongProvider for OpenAiCompatibleProvider {
             response_format: None,
         };
 
-        let resp: ChatCompletionsResponse = self.request_with_retry(url, &body).await?;
+        let (resp, retries, latency): (ChatCompletionsResponse, u32, Duration) =
+            self.request_with_retry(url, &body).await?;
         let choice = resp
             .choices
             .into_iter()
@@ -138,6 +156,17 @@ impl SongProvider for OpenAiCompatibleProvider {
             .ok_or_else(|| LoreleiError::Provider("empty response".to_string()))?;
         let message = choice.message;
         let tool_calls = normalize_tool_calls(message.tool_calls.unwrap_or_default());
+        info!(
+            run_id = %request.run_id.0,
+            provider = %self.name,
+            model = %self.chat_model,
+            latency_ms = latency.as_millis() as u64,
+            retry_count = retries,
+            prompt_tokens = resp.usage.as_ref().map(|u| u.prompt_tokens),
+            completion_tokens = resp.usage.as_ref().map(|u| u.completion_tokens),
+            total_tokens = resp.usage.as_ref().map(|u| u.total_tokens),
+            "song.complete"
+        );
         Ok(SongResponse {
             output: message.content.unwrap_or_default(),
             reasoning_summary: None,
@@ -194,7 +223,16 @@ impl SongProvider for OpenAiCompatibleProvider {
             model,
             input: request.inputs,
         };
-        let resp: EmbeddingsResponse = self.request_with_retry(url, &body).await?;
+        let (resp, retries, latency): (EmbeddingsResponse, u32, Duration) =
+            self.request_with_retry(url, &body).await?;
+        info!(
+            provider = %self.name,
+            model = %resp.model,
+            latency_ms = latency.as_millis() as u64,
+            retry_count = retries,
+            inputs = resp.data.len(),
+            "song.embed"
+        );
         Ok(EmbeddingResponse {
             vectors: resp.data.into_iter().map(|d| d.embedding).collect(),
             model: Some(resp.model),
@@ -235,6 +273,18 @@ struct ChatMessage {
 #[derive(Debug, Deserialize)]
 struct ChatCompletionsResponse {
     choices: Vec<ChatChoice>,
+    #[serde(default)]
+    usage: Option<ChatUsage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatUsage {
+    #[serde(default)]
+    prompt_tokens: u32,
+    #[serde(default)]
+    completion_tokens: u32,
+    #[serde(default)]
+    total_tokens: u32,
 }
 
 #[derive(Debug, Deserialize)]

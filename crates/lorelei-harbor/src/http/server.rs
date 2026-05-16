@@ -245,11 +245,7 @@ pub async fn serve() -> Result<(), LoreleiError> {
         .await
         .map_err(|e| LoreleiError::Internal(format!("bind failed: {e}")))?;
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
-        .init();
+    lorelei_core::observability::init_tracing("harbor");
 
     info!("harbor listening on {}", addr);
     axum::serve(listener, router(state))

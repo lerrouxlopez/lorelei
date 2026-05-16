@@ -31,11 +31,7 @@ impl Default for WorkerConfig {
 }
 
 pub async fn run(cfg: WorkerConfig) -> Result<(), LoreleiError> {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
-        .try_init();
+    lorelei_core::observability::init_tracing("worker");
 
     let state = build_state().await?;
     run_with_state(Arc::new(state), cfg).await

@@ -15,6 +15,7 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use tracing::info_span;
+use tracing::field;
 use tracing_futures::Instrument;
 use uuid::Uuid;
 
@@ -126,7 +127,12 @@ impl SingleAgentTideRuntime {
         user_input: String,
         enable_memory: bool,
     ) -> Result<TideResult, LoreleiError> {
-        let span = info_span!("tide.run_once", tenant_id = %tenant_id.0, agent_id = %agent_id.0);
+        let span = info_span!(
+            "tide.run_once",
+            tenant_id = %tenant_id.0,
+            agent_id = %agent_id.0,
+            run_id = field::Empty
+        );
         async move {
             self.run_once_inner(tenant_id, agent_id, None, user_input, enable_memory)
                 .await
@@ -147,7 +153,8 @@ impl SingleAgentTideRuntime {
             "tide.run_task_once",
             tenant_id = %tenant_id.0,
             agent_id = %agent_id.0,
-            task_id = %task_id.0
+            task_id = %task_id.0,
+            run_id = field::Empty
         );
         async move {
             self.run_once_inner(
@@ -177,6 +184,7 @@ impl SingleAgentTideRuntime {
             .create_run(tenant_id, agent_id, &user_input)
             .instrument(info_span!("tide.create_run"))
             .await?;
+        tracing::Span::current().record("run_id", tracing::field::display(run.run_id.0));
 
         // 2. Write user Current event
         let user_event_id = lorelei_core::types::EchoId(Uuid::new_v4());

@@ -10,6 +10,7 @@ use lorelei_core::types::{
     TenantId,
 };
 use std::sync::Arc;
+use tracing::info;
 
 #[derive(Clone)]
 pub struct DeterministicSirenPolicy {
@@ -60,6 +61,22 @@ impl DeterministicSirenPolicy {
 
     fn high_risk_tools(&self) -> &'static [&'static str] {
         &["forget_pearl"]
+    }
+
+    fn risk_for_tools(&self, tools: &[String]) -> lorelei_core::types::ShellRisk {
+        if tools.iter().any(|t| self.high_risk_tools().contains(&t.as_str())) {
+            return lorelei_core::types::ShellRisk::High;
+        }
+        if tools
+            .iter()
+            .any(|t| self.medium_risk_tools().contains(&t.as_str()))
+        {
+            return lorelei_core::types::ShellRisk::Medium;
+        }
+        if tools.iter().any(|t| Self::is_readonly_low_risk(t)) {
+            return lorelei_core::types::ShellRisk::Low;
+        }
+        lorelei_core::types::ShellRisk::Medium
     }
 
     fn is_readonly_low_risk(tool: &str) -> bool {
@@ -223,6 +240,33 @@ impl SirenPolicy for DeterministicSirenPolicy {
                 shell_names,
             )
             .await?;
+
+        let mut requested_tools = Self::extract_tool_names(tool_calls);
+        requested_tools.extend(shell_names.iter().cloned());
+        requested_tools.sort();
+        requested_tools.dedup();
+        let risk = self.risk_for_tools(&requested_tools);
+        let decision = match &det {
+            SirenDecision::Allow { .. } => "allow",
+            SirenDecision::Deny { .. } => "deny",
+            SirenDecision::RequireApproval { .. } => "require_approval",
+        };
+        let reason = match &det {
+            SirenDecision::Allow { reasoning_summary } => reasoning_summary.as_str(),
+            SirenDecision::Deny { reasoning_summary } => reasoning_summary.as_str(),
+            SirenDecision::RequireApproval { reasoning_summary, .. } => reasoning_summary.as_str(),
+        };
+        info!(
+            run_id = %run_id.0,
+            tenant_id = %tenant_id.0,
+            agent_id = %agent_id.0,
+            task_id = task_id.map(|t| t.0),
+            decision = decision,
+            risk = ?risk,
+            reason = reason,
+            tools = requested_tools.len(),
+            "siren.decision"
+        );
 
         if !self.enable_llm_policy {
             return Ok(det);

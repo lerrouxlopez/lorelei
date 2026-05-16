@@ -43,6 +43,30 @@ pub enum Command {
     },
     /// Build the Docker image(s)
     Ship(ShipArgs),
+    /// Inspect runs and their artifacts (via Harbor)
+    Run(RunArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct RunArgs {
+    #[command(flatten)]
+    pub config: ConfigArgs,
+    #[command(flatten)]
+    pub harbor: HarborArgs,
+    #[command(subcommand)]
+    pub command: RunCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum RunCommand {
+    Inspect(RunIdArg),
+    Currents(RunIdArg),
+    Memories(RunIdArg),
+}
+
+#[derive(Debug, Args)]
+pub struct RunIdArg {
+    pub run_id: String,
 }
 
 #[derive(Debug, Args)]

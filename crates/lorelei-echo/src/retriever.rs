@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 
 use chrono::{DateTime, Utc};
-use log::warn;
 use lorelei_core::error::LoreleiError;
 use lorelei_core::traits::{EchoRetriever, LoreStore};
 use lorelei_core::types::{
@@ -11,6 +10,8 @@ use lorelei_lore::embedding::EmbeddingProvider;
 use lorelei_lore::qdrant::QdrantPearlIndex;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::Instant;
+use tracing::{debug, info, warn};
 
 pub struct EchoRetrievalConfig {
     pub rerank_top_k: usize,
@@ -165,6 +166,7 @@ impl<S: LoreStore + Send + Sync> EchoRetriever for EchoEngine<S> {
         agent_id: AgentId,
         query: EchoQuery,
     ) -> Result<Vec<EchoHit>, LoreleiError> {
+        let started = Instant::now();
         let effective = self
             .effective_query(tenant_id, agent_id, &query.query)
             .await?;
@@ -172,6 +174,13 @@ impl<S: LoreStore + Send + Sync> EchoRetriever for EchoEngine<S> {
         if variants.is_empty() || query.top_k == 0 {
             return Ok(Vec::new());
         }
+        debug!(
+            tenant_id = %tenant_id.0,
+            agent_id = %agent_id.0,
+            query_len = query.query.len(),
+            variants = variants.len(),
+            "echo.query_variants"
+        );
 
         let emb = self
             .embedder
@@ -197,12 +206,22 @@ impl<S: LoreStore + Send + Sync> EchoRetriever for EchoEngine<S> {
         }
 
         if best_vec.is_empty() {
+            info!(
+                tenant_id = %tenant_id.0,
+                agent_id = %agent_id.0,
+                query_variants = variants.len(),
+                candidates = 0usize,
+                hits = 0usize,
+                latency_ms = started.elapsed().as_millis() as u64,
+                "echo.query"
+            );
             return Ok(Vec::new());
         }
 
         // Fetch pearls from Postgres (source of truth) and filter.
         let mut pearls: Vec<(Pearl, f32)> = Vec::new();
         let mut missing = Vec::new();
+        let candidate_count = best_vec.len();
         for (pearl_id, vec_score) in best_vec {
             match self.fetch_pearl(tenant_id, pearl_id).await? {
                 Some(p) => {
@@ -222,7 +241,7 @@ impl<S: LoreStore + Send + Sync> EchoRetriever for EchoEngine<S> {
             }
         }
         for id in missing {
-            warn!("ignored qdrant-only hit for pearl_id {}", id.0);
+            warn!(tenant_id = %tenant_id.0, pearl_id = %id.0, "echo.ignored_qdrant_only_hit");
         }
 
         // Deduplicate by identical content (lightweight).
@@ -257,6 +276,16 @@ impl<S: LoreStore + Send + Sync> EchoRetriever for EchoEngine<S> {
             .top_k
             .min(self.cfg.rerank_top_k.max(1))
             .min(ranked.len());
-        Ok(ranked.into_iter().take(take).map(|(h, _)| h).collect())
+        let out: Vec<EchoHit> = ranked.into_iter().take(take).map(|(h, _)| h).collect();
+        info!(
+            tenant_id = %tenant_id.0,
+            agent_id = %agent_id.0,
+            query_variants = variants.len(),
+            candidates = candidate_count,
+            hits = out.len(),
+            latency_ms = started.elapsed().as_millis() as u64,
+            "echo.query"
+        );
+        Ok(out)
     }
 }

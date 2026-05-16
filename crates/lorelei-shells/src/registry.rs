@@ -10,6 +10,8 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Instant;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 type CurrentIdProvider = Arc<dyn Fn(&ShellCall) -> Option<Uuid> + Send + Sync>;
@@ -73,6 +75,7 @@ impl BuiltinShellRegistry {
     }
 
     async fn run_one(&self, call: ShellCall) -> Result<ShellResult, LoreleiError> {
+        let started = Instant::now();
         // Enforce network tools config centrally.
         if call.tool == "http_get" && !self.config.siren.allow_network_tools {
             return Err(LoreleiError::Unsupported(
@@ -88,9 +91,22 @@ impl BuiltinShellRegistry {
         // Record start *after* we've validated tool existence / config gating.
         self.calls.record_start(current_id, &call).await?;
 
+        let run_id = call.run_id.0;
+        let tool_name = call.tool.clone();
+        let risk = call.risk;
+
         match tool.execute(call).await {
             Ok(result) => {
+                let latency = started.elapsed();
                 self.calls.record_finish(&result).await?;
+                info!(
+                    run_id = %run_id,
+                    tool = %tool_name,
+                    risk = ?risk,
+                    status = "ok",
+                    latency_ms = latency.as_millis() as u64,
+                    "shell.call"
+                );
                 Ok(result)
             }
             Err(e) => {
@@ -104,6 +120,15 @@ impl BuiltinShellRegistry {
                     finished_at: now,
                 };
                 self.calls.record_finish(&failed).await?;
+                let latency = started.elapsed();
+                warn!(
+                    run_id = %run_id,
+                    tool = %tool_name,
+                    risk = ?risk,
+                    status = "error",
+                    latency_ms = latency.as_millis() as u64,
+                    "shell.call"
+                );
                 Err(e)
             }
         }

@@ -7,9 +7,9 @@ license.workspace = true
 [dependencies]
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
-log = "0.4"
 lorelei-core = { path = "../lorelei-core" }
 lorelei-lore = { path = "../lorelei-lore" }
+tracing = "0.1"
 
 [dev-dependencies]
 qdrant-client = "1.18"
