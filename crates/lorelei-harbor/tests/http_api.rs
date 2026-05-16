@@ -12,6 +12,8 @@ use lorelei_core::types::{
 use lorelei_echo::retriever::{EchoEngine, EchoRetrievalConfig};
 use lorelei_harbor::http::server::{router, AppState};
 use lorelei_lore::pg::PgLoreStore;
+use lorelei_shells::registry::BuiltinShellRegistry;
+use lorelei_shells::repo::NullShellCallRepository;
 use qdrant_client::Qdrant;
 use sqlx::postgres::PgPoolOptions;
 use std::collections::BTreeMap;
@@ -161,16 +163,26 @@ fn minimal_state() -> AppState {
         .unwrap();
     let qdrant = Qdrant::from_url("http://127.0.0.1:1").build().unwrap();
 
+    let lore_store: Arc<dyn LoreStore> = Arc::new(MemLoreStore::default());
+    let echo: Arc<dyn EchoRetriever> = Arc::new(EmptyEcho);
+    let shells = Arc::new(BuiltinShellRegistry::new(
+        cfg.clone(),
+        lore_store.clone(),
+        echo.clone(),
+        Arc::new(NullShellCallRepository),
+    ));
+
     AppState {
         config: cfg,
         pg_pool,
         qdrant: qdrant.clone(),
         qdrant_index: lorelei_lore::qdrant::QdrantPearlIndex::new(qdrant, "lorelei"),
-        lore_store: Arc::new(MemLoreStore::default()),
-        echo: Arc::new(EmptyEcho),
+        lore_store,
+        echo,
         providers: Arc::new(lorelei_song::registry::ProviderRegistry::from_providers(
             BTreeMap::new(),
         )),
+        shells,
     }
 }
 
@@ -258,14 +270,23 @@ async fn env_state() -> Option<AppState> {
 
     let providers_reg = Arc::new(lorelei_song::registry::ProviderRegistry::from_config(&cfg).ok()?);
 
+    let lore_store_arc: Arc<dyn LoreStore> = Arc::new(lore_store);
+    let shells = Arc::new(BuiltinShellRegistry::new(
+        cfg.clone(),
+        lore_store_arc.clone(),
+        echo_engine.clone(),
+        Arc::new(NullShellCallRepository),
+    ));
+
     Some(AppState {
         config: cfg,
         pg_pool,
         qdrant,
         qdrant_index,
-        lore_store: Arc::new(lore_store),
+        lore_store: lore_store_arc,
         echo: echo_engine,
         providers: providers_reg,
+        shells,
     })
 }
 

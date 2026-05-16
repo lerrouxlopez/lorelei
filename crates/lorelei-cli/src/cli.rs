@@ -26,6 +26,8 @@ pub enum Command {
     Forget(ForgetArgs),
     /// List configured providers (via Harbor)
     Providers(HarborArgs),
+    /// List available Shell tools (via Harbor)
+    Shells(HarborArgs),
     /// Reef (docker compose) operations
     Reef {
         #[command(subcommand)]
@@ -161,6 +163,15 @@ mod tests {
         match cli.command {
             Command::Memo(m) => assert_eq!(m.content, "hello"),
             _ => panic!("expected memo"),
+        }
+    }
+
+    #[test]
+    fn clap_parses_shells() {
+        let cli = Cli::try_parse_from(["lore", "shells"]).unwrap();
+        match cli.command {
+            Command::Shells(_) => {}
+            _ => panic!("expected shells"),
         }
     }
 

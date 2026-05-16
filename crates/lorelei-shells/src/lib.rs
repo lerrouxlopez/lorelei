@@ -1,6 +1,7 @@
-//! Tool boundaries ("Shells") scaffolding.
+//! Tool boundaries ("Shells") and registry.
 
 #![forbid(unsafe_code)]
 
-pub mod policy;
-pub mod tool;
+pub mod builtin;
+pub mod registry;
+pub mod repo;

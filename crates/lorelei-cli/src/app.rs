@@ -63,6 +63,13 @@ pub async fn run(cli: Cli) -> i32 {
                 1
             }
         },
+        Command::Shells(args) => match cmd_shells(args).await {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("{e}");
+                1
+            }
+        },
         Command::Reef { command } => match cmd_reef(command) {
             Ok(code) => code,
             Err(e) => {
@@ -349,6 +356,20 @@ async fn cmd_providers(args: HarborArgs) -> Result<(), String> {
     println!(
         "{}",
         serde_json::to_string_pretty(&providers).unwrap_or_else(|_| "[]".to_string())
+    );
+    Ok(())
+}
+
+async fn cmd_shells(args: HarborArgs) -> Result<(), String> {
+    let harbor_url = HarborClient::default_base_url(args.harbor_url);
+    let harbor = HarborClient::new(harbor_url)?;
+    let shells: serde_json::Value = harbor
+        .get_json("/v1/shells")
+        .await
+        .map_err(|e| e.to_string())?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&shells).unwrap_or_else(|_| "[]".to_string())
     );
     Ok(())
 }

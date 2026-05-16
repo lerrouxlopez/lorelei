@@ -14,6 +14,8 @@ use lorelei_echo::retriever::{EchoEngine, EchoRetrievalConfig};
 use lorelei_lore::embedding::{DynSongProviderEmbeddingAdapter, EmbeddingProvider};
 use lorelei_lore::pg::PgLoreStore;
 use lorelei_lore::qdrant::QdrantPearlIndex;
+use lorelei_shells::registry::BuiltinShellRegistry;
+use lorelei_shells::repo::NullShellCallRepository;
 use lorelei_song::registry::ProviderRegistry;
 use qdrant_client::Qdrant;
 use serde::{Deserialize, Serialize};
@@ -31,6 +33,7 @@ pub struct AppState {
     pub lore_store: Arc<dyn LoreStore>,
     pub echo: Arc<dyn EchoRetriever>,
     pub providers: Arc<ProviderRegistry>,
+    pub shells: Arc<BuiltinShellRegistry>,
 }
 
 #[derive(Debug, Serialize)]
@@ -101,6 +104,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/pearls/:pearl_id", get(get_pearl).delete(delete_pearl))
         .route("/v1/echo", post(echo))
         .route("/v1/providers", get(list_providers))
+        .route("/v1/shells", get(list_shells))
         .route("/v1/runs/:run_id/currents", get(currents_placeholder))
         .layer(middleware::from_fn(request_id_middleware))
         .with_state(state)
@@ -164,14 +168,25 @@ pub async fn build_state() -> Result<AppState, LoreleiError> {
         },
     );
 
+    let lore_store: Arc<dyn LoreStore> = Arc::new(lore_store_indexed);
+    let echo: Arc<dyn EchoRetriever> = Arc::new(echo_engine);
+
+    let shells: Arc<BuiltinShellRegistry> = Arc::new(BuiltinShellRegistry::new(
+        config.clone(),
+        lore_store.clone(),
+        echo.clone(),
+        Arc::new(NullShellCallRepository),
+    ));
+
     Ok(AppState {
         config,
         pg_pool,
         qdrant,
         qdrant_index,
-        lore_store: Arc::new(lore_store_indexed),
-        echo: Arc::new(echo_engine),
+        lore_store,
+        echo,
         providers,
+        shells,
     })
 }
 
@@ -469,6 +484,10 @@ async fn list_providers(State(state): State<AppState>) -> impl IntoResponse {
         });
     }
     Json(out)
+}
+
+async fn list_shells(State(state): State<AppState>) -> impl IntoResponse {
+    Json(state.shells.specs())
 }
 
 async fn currents_placeholder(Path(_run_id): Path<Uuid>) -> impl IntoResponse {
