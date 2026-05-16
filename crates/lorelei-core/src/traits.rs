@@ -2,8 +2,9 @@
 
 use crate::error::LoreleiError;
 use crate::types::{
-    AgentId, CurrentEvent, EchoHit, EchoQuery, NormalizedToolCall, ProviderCapabilities, Run,
-    RunId, ShellCall, ShellResult, SirenDecision, SongChunk, SongRequest, SongResponse, TenantId,
+    AgentId, CurrentEvent, EchoHit, EchoQuery, NormalizedToolCall, Pearl, PearlId, PearlListQuery,
+    ProviderCapabilities, Run, RunId, ShellCall, ShellResult, SirenDecision, SongChunk,
+    SongRequest, SongResponse, TenantId,
 };
 use async_trait::async_trait;
 use futures::stream::BoxStream;
@@ -22,12 +23,38 @@ pub trait SongProvider: Send + Sync {
 
 #[async_trait]
 pub trait LoreStore: Send + Sync {
-    async fn put_pearl(
+    async fn save_pearl(
         &self,
         tenant_id: TenantId,
         agent_id: AgentId,
         pearl: crate::types::NewPearl,
-    ) -> Result<crate::types::Pearl, LoreleiError>;
+    ) -> Result<Pearl, LoreleiError>;
+
+    async fn get_pearl(
+        &self,
+        tenant_id: TenantId,
+        pearl_id: PearlId,
+        include_deleted: bool,
+    ) -> Result<Option<Pearl>, LoreleiError>;
+
+    async fn list_pearls(
+        &self,
+        tenant_id: TenantId,
+        query: PearlListQuery,
+    ) -> Result<Vec<Pearl>, LoreleiError>;
+
+    async fn forget_pearl(
+        &self,
+        tenant_id: TenantId,
+        pearl_id: PearlId,
+    ) -> Result<(), LoreleiError>;
+
+    async fn update_last_echoed_at(
+        &self,
+        tenant_id: TenantId,
+        pearl_id: PearlId,
+        last_echoed_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), LoreleiError>;
 }
 
 #[async_trait]

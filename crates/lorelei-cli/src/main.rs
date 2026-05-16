@@ -1,7 +1,8 @@
 mod commands;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let code = commands::run(&args);
+    let code = commands::run(&args).await;
     std::process::exit(code);
 }

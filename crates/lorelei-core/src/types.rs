@@ -322,3 +322,13 @@ pub enum SirenDecision {
     Deny { reasoning_summary: String },
     RequireReview { reasoning_summary: String },
 }
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct PearlListQuery {
+    pub agent_id: Option<AgentId>,
+    pub pearl_type: Option<PearlType>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    pub limit: Option<usize>,
+    pub include_deleted: bool,
+}

@@ -798,6 +798,10 @@ version = "0.1.0"
 dependencies = [
  "dotenvy",
  "lorelei-core",
+ "lorelei-lore",
+ "sqlx",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -839,6 +843,16 @@ dependencies = [
 [[package]]
 name = "lorelei-lore"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "lorelei-core",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "uuid",
+]
 
 [[package]]
 name = "lorelei-shells"
