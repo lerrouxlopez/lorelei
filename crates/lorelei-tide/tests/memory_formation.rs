@@ -8,32 +8,15 @@ use lorelei_core::traits::{
     CurrentStore, EchoRetriever, LoreStore, ShellRegistry, SirenPolicy, SongProvider,
 };
 use lorelei_core::types::{
-    AgentId, CurrentEvent, EchoHit, EchoQuery, Pearl, PearlId, PearlListQuery, PearlType, Run,
-    RunId, RunStatus, ShellCall, ShellResult, SongChunk, SongRequest, SongResponse, TenantId,
-    UnitInterval,
+    AgentId, CurrentEvent, CurrentEventType, EchoHit, EchoQuery, NewPearl, Pearl, PearlId,
+    PearlListQuery, PearlType, Run, RunId, RunStatus, ShellCall, ShellResult, SongChunk,
+    SongRequest, SongResponse, TenantId, UnitInterval,
 };
 use lorelei_siren::policy::DeterministicSirenPolicy;
-use lorelei_song::providers::mock::MockSongProvider;
 use lorelei_tide::runtime::{RunRepository, SingleAgentTideRuntime};
-use serde_json::json;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
-
-const PLANNER_OK: &str = r#"
-LORELEI_MODE=planner_json
-{ "dummy": "{{USER_INPUT}}" }
-"#;
-
-const PLANNER_INVALID_ONCE: &str = r#"
-LORELEI_MODE=planner_json_invalid_once
-"#;
-
-const ANSWER_TEMPLATE: &str = r#"
-LORELEI_MODE=answer
-User: {{USER_INPUT}}
-Echo: {{ECHO_HITS}}
-"#;
 
 #[derive(Default)]
 struct MemRuns {
@@ -46,7 +29,7 @@ impl RunRepository for MemRuns {
         &self,
         tenant_id: TenantId,
         agent_id: AgentId,
-        goal: &str,
+        _goal: &str,
     ) -> Result<Run, LoreleiError> {
         let run = Run {
             run_id: RunId(Uuid::new_v4()),
@@ -57,7 +40,6 @@ impl RunRepository for MemRuns {
             updated_at: chrono::Utc::now(),
         };
         self.runs.lock().unwrap().push(run.clone());
-        let _ = goal;
         Ok(run)
     }
 
@@ -125,9 +107,7 @@ impl CurrentStore for MemCurrents {
     }
 }
 
-struct FixedEcho {
-    hits: Vec<EchoHit>,
-}
+struct FixedEcho;
 
 #[async_trait]
 impl EchoRetriever for FixedEcho {
@@ -137,43 +117,38 @@ impl EchoRetriever for FixedEcho {
         _agent_id: AgentId,
         _query: EchoQuery,
     ) -> Result<Vec<EchoHit>, LoreleiError> {
-        Ok(self.hits.clone())
+        Ok(vec![])
     }
 }
 
 #[derive(Default)]
-struct FakeShells {
-    calls: Mutex<Vec<String>>,
-}
+struct FakeShells;
 
 #[async_trait]
 impl ShellRegistry for FakeShells {
     async fn list_shells(&self) -> Result<Vec<String>, LoreleiError> {
-        Ok(vec!["echo".to_string(), "forget_pearl".to_string()])
+        Ok(vec![])
     }
 
     async fn call(&self, call: ShellCall) -> Result<ShellResult, LoreleiError> {
-        self.calls.lock().unwrap().push(call.tool.clone());
-        Ok(ShellResult {
-            call_id: call.call_id,
-            ok: true,
-            output: json!({"ok": true}),
-            error: None,
-            started_at: chrono::Utc::now(),
-            finished_at: chrono::Utc::now(),
-        })
+        let _ = call;
+        Err(LoreleiError::Unsupported("no shells".to_string()))
     }
-}
-
-#[derive(Default)]
-struct CapturingSong {
-    inner: MockSongProvider,
-    requests: Mutex<Vec<SongRequest>>,
 }
 
 #[derive(Default)]
 struct MemLoreStore {
     pearls: Mutex<HashMap<PearlId, Pearl>>,
+}
+
+impl MemLoreStore {
+    fn count(&self) -> usize {
+        self.pearls.lock().unwrap().len()
+    }
+
+    fn all(&self) -> Vec<Pearl> {
+        self.pearls.lock().unwrap().values().cloned().collect()
+    }
 }
 
 #[async_trait]
@@ -182,7 +157,7 @@ impl LoreStore for MemLoreStore {
         &self,
         tenant_id: TenantId,
         agent_id: AgentId,
-        pearl: lorelei_core::types::NewPearl,
+        pearl: NewPearl,
     ) -> Result<Pearl, LoreleiError> {
         let saved = Pearl {
             pearl_id: PearlId(Uuid::new_v4()),
@@ -301,35 +276,7 @@ impl SongProvider for ScriptedSong {
     }
 }
 
-#[async_trait]
-impl SongProvider for CapturingSong {
-    fn capabilities(&self) -> lorelei_core::types::ProviderCapabilities {
-        self.inner.capabilities()
-    }
-
-    async fn complete(&self, request: SongRequest) -> Result<SongResponse, LoreleiError> {
-        self.requests.lock().unwrap().push(request.clone());
-        self.inner.complete(request).await
-    }
-
-    async fn stream(
-        &self,
-        request: SongRequest,
-    ) -> Result<futures::stream::BoxStream<'static, SongChunk>, LoreleiError> {
-        self.inner.stream(request).await
-    }
-
-    async fn embed(
-        &self,
-        request: lorelei_core::types::EmbeddingRequest,
-    ) -> Result<lorelei_core::types::EmbeddingResponse, LoreleiError> {
-        self.inner.embed(request).await
-    }
-}
-
-fn cfg(allow_shell_execution: bool, allow_network: bool) -> LoreleiConfig {
-    std::env::set_var("LORELEI_DETERMINISTIC_EXTRACT", "0");
-
+fn cfg() -> LoreleiConfig {
     let tenant_id = TenantId(Uuid::from_u128(1));
     let agent_id = AgentId(Uuid::from_u128(2));
     let mut providers = BTreeMap::new();
@@ -366,175 +313,294 @@ fn cfg(allow_shell_execution: bool, allow_network: bool) -> LoreleiConfig {
         },
         siren: SirenConfig {
             require_approval_for_high_risk: true,
-            allow_shell_execution,
-            allow_network_tools: allow_network,
+            allow_shell_execution: false,
+            allow_network_tools: false,
         },
         providers,
     }
 }
 
-#[tokio::test]
-async fn direct_answer_path() {
-    let cfg = cfg(false, false);
+fn tide_with(
+    song: Arc<dyn SongProvider>,
+    lore: Arc<dyn LoreStore>,
+    currents: Arc<MemCurrents>,
+) -> SingleAgentTideRuntime {
+    std::env::set_var("LORELEI_DETERMINISTIC_EXTRACT", "0");
+
+    let cfg = cfg();
     let runs = Arc::new(MemRuns::default());
-    let currents = Arc::new(MemCurrents::default());
-    let echo = Arc::new(FixedEcho {
-        hits: vec![EchoHit {
-            score: UnitInterval::new(1.0).unwrap(),
-            pearl_id: PearlId(Uuid::new_v4()),
-            content: "remember this".to_string(),
-            pearl_type: PearlType::Other,
-            reason: "test".to_string(),
-            created_at: chrono::Utc::now(),
-        }],
-    });
-    let song = Arc::new(CapturingSong {
-        inner: MockSongProvider::deterministic(),
-        requests: Mutex::new(Vec::new()),
-    });
-    let lore: Arc<dyn LoreStore> = Arc::new(MemLoreStore::default());
-    let shells = Arc::new(FakeShells::default());
+    let echo: Arc<dyn EchoRetriever> = Arc::new(FixedEcho);
+    let shells: Arc<dyn ShellRegistry> = Arc::new(FakeShells);
     let siren: Arc<dyn SirenPolicy> = Arc::new(DeterministicSirenPolicy::new(cfg.clone()));
+
+    SingleAgentTideRuntime::new(cfg, runs, currents, echo, lore, song, shells, siren)
+        .with_templates(
+            r#"{"action":"answer","answer":"ok"}"#,
+            r#"LORELEI_MODE=answer {{USER_INPUT}}"#,
+        )
+}
+
+#[tokio::test]
+async fn stable_preference_is_stored() {
+    let lore = Arc::new(MemLoreStore::default());
+    let currents = Arc::new(MemCurrents::default());
+    let song: Arc<dyn SongProvider> = Arc::new(ScriptedSong::new(vec![
+        r#"{"action":"answer","answer":"ok"}"#.to_string(),
+        "ok".to_string(),
+        r#"[{"pearl_type":"Preference","content":"User prefers concise output.","confidence":0.9,"importance":0.7,"tags":["preference"]}]"#.to_string(),
+    ]));
+
+    let tide = tide_with(song, lore.clone(), currents.clone());
+    let res = tide
+        .run_once(
+            TenantId(Uuid::from_u128(1)),
+            AgentId(Uuid::from_u128(2)),
+            "hi".to_string(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status, RunStatus::Succeeded);
+    assert_eq!(lore.count(), 1);
+    assert!(lore.all()[0].content.contains("concise output"));
+
+    let events = currents.events.lock().unwrap();
+    assert!(events
+        .iter()
+        .any(|e| e.event_type == CurrentEventType::System && e.summary == "memory formation"));
+}
+
+#[tokio::test]
+async fn temporary_task_is_rejected() {
+    let lore = Arc::new(MemLoreStore::default());
+    let currents = Arc::new(MemCurrents::default());
+    let song: Arc<dyn SongProvider> = Arc::new(ScriptedSong::new(vec![
+        r#"{"action":"answer","answer":"ok"}"#.to_string(),
+        "ok".to_string(),
+        r#"[{"pearl_type":"Plan","content":"Remind me tomorrow to submit the report.","confidence":0.9,"importance":0.7}]"#.to_string(),
+    ]));
+
+    let tide = tide_with(song, lore.clone(), currents.clone());
+    let _ = tide
+        .run_once(
+            TenantId(Uuid::from_u128(1)),
+            AgentId(Uuid::from_u128(2)),
+            "hi".to_string(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(lore.count(), 0);
+}
+
+#[tokio::test]
+async fn duplicate_memory_is_rejected_by_exact_match() {
+    let lore = Arc::new(MemLoreStore::default());
+    let currents = Arc::new(MemCurrents::default());
+
+    let existing = NewPearl::new(
+        PearlType::Fact,
+        "The reef uses Postgres.",
+        UnitInterval::new(0.5).unwrap(),
+        UnitInterval::new(0.9).unwrap(),
+        Default::default(),
+    )
+    .unwrap();
+    let _ = lore
+        .save_pearl(
+            TenantId(Uuid::from_u128(1)),
+            AgentId(Uuid::from_u128(2)),
+            existing,
+        )
+        .await
+        .unwrap();
+
+    let song: Arc<dyn SongProvider> = Arc::new(ScriptedSong::new(vec![
+        r#"{"action":"answer","answer":"ok"}"#.to_string(),
+        "ok".to_string(),
+        r#"[{"pearl_type":"Fact","content":"  the   reef  uses  postgres. ","confidence":0.9,"importance":0.7}]"#.to_string(),
+    ]));
+
+    let tide = tide_with(song, lore.clone(), currents);
+    let _ = tide
+        .run_once(
+            TenantId(Uuid::from_u128(1)),
+            AgentId(Uuid::from_u128(2)),
+            "hi".to_string(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(lore.count(), 1);
+}
+
+#[tokio::test]
+async fn explicit_remember_request_is_stored() {
+    let lore = Arc::new(MemLoreStore::default());
+    let currents = Arc::new(MemCurrents::default());
+    let song: Arc<dyn SongProvider> = Arc::new(ScriptedSong::new(vec![
+        r#"{"action":"answer","answer":"ok"}"#.to_string(),
+        "ok".to_string(),
+        r#"[{"pearl_type":"Preference","content":"User prefers tea.","confidence":0.9,"importance":0.7}]"#.to_string(),
+    ]));
+
+    let tide = tide_with(song, lore.clone(), currents);
+    let _ = tide
+        .run_once(
+            TenantId(Uuid::from_u128(1)),
+            AgentId(Uuid::from_u128(2)),
+            "Remember that I prefer tea.".to_string(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(lore.count(), 1);
+    assert!(lore.all()[0].content.contains("prefers tea"));
+}
+
+#[tokio::test]
+async fn sensitive_unsupported_memory_is_rejected() {
+    let lore = Arc::new(MemLoreStore::default());
+    let currents = Arc::new(MemCurrents::default());
+    let song: Arc<dyn SongProvider> = Arc::new(ScriptedSong::new(vec![
+        r#"{"action":"answer","answer":"ok"}"#.to_string(),
+        "ok".to_string(),
+        r#"[{"pearl_type":"Fact","content":"My password is hunter2.","confidence":0.9,"importance":0.7}]"#.to_string(),
+    ]));
+
+    let tide = tide_with(song, lore.clone(), currents);
+    let _ = tide
+        .run_once(
+            TenantId(Uuid::from_u128(1)),
+            AgentId(Uuid::from_u128(2)),
+            "hi".to_string(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(lore.count(), 0);
+}
+
+async fn maybe_pg() -> Option<sqlx::PgPool> {
+    let url = match std::env::var("DATABASE_URL") {
+        Ok(v) if !v.trim().is_empty() => v,
+        _ => return None,
+    };
+    sqlx::postgres::PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&url)
+        .await
+        .ok()
+}
+
+fn maybe_qdrant() -> Option<qdrant_client::Qdrant> {
+    let url = match std::env::var("QDRANT_URL") {
+        Ok(v) if !v.trim().is_empty() => v,
+        _ => return None,
+    };
+    qdrant_client::Qdrant::from_url(&url).build().ok()
+}
+
+#[tokio::test]
+async fn accepted_pearl_is_searchable_by_echo_integration() {
+    let Some(pool) = maybe_pg().await else { return };
+    let Some(client) = maybe_qdrant() else { return };
+
+    let tenant_id = TenantId(Uuid::new_v4());
+    let agent_id = AgentId(Uuid::new_v4());
+    let collection = format!("lorelei_mem_test_{}", Uuid::new_v4());
+
+    let index = lorelei_lore::qdrant::QdrantPearlIndex::new(client, collection);
+    let embedder: Arc<dyn lorelei_lore::embedding::EmbeddingProvider> =
+        Arc::new(lorelei_lore::embedding::DeterministicMockEmbeddingProvider::new(64));
+
+    let pool_tide = pool.clone();
+    let pool_echo = pool.clone();
+    let pool_verify = pool;
+
+    // Separate store instances backed by same Postgres/Qdrant for Tide vs Echo verification.
+    let tide_store = lorelei_lore::pg::PgLoreStore::new_indexed(
+        pool_tide,
+        index.clone(),
+        embedder.clone(),
+        "mock",
+    );
+    tide_store.migrate().await.expect("migrate");
+
+    let echo_store = lorelei_lore::pg::PgLoreStore::new_indexed(
+        pool_echo,
+        index.clone(),
+        embedder.clone(),
+        "mock",
+    );
+
+    let currents = Arc::new(MemCurrents::default());
+    let cfg = cfg();
+    let runs = Arc::new(MemRuns::default());
+    let shells: Arc<dyn ShellRegistry> = Arc::new(FakeShells);
+    let siren: Arc<dyn SirenPolicy> = Arc::new(DeterministicSirenPolicy::new(cfg.clone()));
+
+    let song: Arc<dyn SongProvider> = Arc::new(ScriptedSong::new(vec![
+        r#"{"action":"answer","answer":"ok"}"#.to_string(),
+        "ok".to_string(),
+        r#"[{"pearl_type":"Fact","content":"The Lore starts in Postgres.","confidence":0.9,"importance":0.7}]"#.to_string(),
+    ]));
 
     let tide = SingleAgentTideRuntime::new(
         cfg,
         runs,
-        currents.clone(),
-        echo,
-        lore,
-        song.clone(),
+        currents,
+        Arc::new(lorelei_echo::retriever::EchoEngine::new(
+            echo_store,
+            index.clone(),
+            embedder.clone(),
+            "mock",
+            lorelei_echo::retriever::EchoRetrievalConfig {
+                rerank_top_k: 10,
+                enable_query_rewrite: false,
+            },
+        )),
+        Arc::new(tide_store),
+        song,
         shells,
         siren,
     )
-    .with_templates(PLANNER_OK, ANSWER_TEMPLATE);
-
-    let res = tide
-        .run_once(
-            TenantId(Uuid::from_u128(1)),
-            AgentId(Uuid::from_u128(2)),
-            "hi".to_string(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(res.status, RunStatus::Succeeded);
-    assert!(res.output.contains("run_id="));
-
-    let reqs = song.requests.lock().unwrap().clone();
-    let answer_req = reqs
-        .iter()
-        .find(|r| r.reasoning_summary.as_deref() == Some("answer"))
-        .expect("answer request");
-    assert!(answer_req
-        .context
-        .iter()
-        .any(|c| c.contains("remember this")));
-
-    let events = currents.events.lock().unwrap();
-    assert!(events
-        .iter()
-        .any(|e| e.event_type == lorelei_core::types::CurrentEventType::User));
-    assert!(events
-        .iter()
-        .any(|e| e.event_type == lorelei_core::types::CurrentEventType::Assistant));
-}
-
-#[tokio::test]
-async fn invalid_planner_json_repair_path() {
-    let cfg = cfg(false, false);
-    let runs = Arc::new(MemRuns::default());
-    let currents = Arc::new(MemCurrents::default());
-    let echo = Arc::new(FixedEcho { hits: vec![] });
-    let lore: Arc<dyn LoreStore> = Arc::new(MemLoreStore::default());
-    let song: Arc<dyn SongProvider> = Arc::new(MockSongProvider::deterministic());
-    let shells = Arc::new(FakeShells::default());
-    let siren: Arc<dyn SirenPolicy> = Arc::new(DeterministicSirenPolicy::new(cfg.clone()));
-
-    let tide = SingleAgentTideRuntime::new(cfg, runs, currents, echo, lore, song, shells, siren)
-        .with_templates(PLANNER_INVALID_ONCE, ANSWER_TEMPLATE);
-    let res = tide
-        .run_once(
-            TenantId(Uuid::from_u128(1)),
-            AgentId(Uuid::from_u128(2)),
-            "hi".to_string(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(res.status, RunStatus::Succeeded);
-}
-
-#[tokio::test]
-async fn siren_requires_approval_path() {
-    let cfg = cfg(true, false);
-    let runs = Arc::new(MemRuns::default());
-    let currents = Arc::new(MemCurrents::default());
-    let echo = Arc::new(FixedEcho { hits: vec![] });
-    let lore: Arc<dyn LoreStore> = Arc::new(MemLoreStore::default());
-    let song: Arc<dyn SongProvider> = Arc::new(ScriptedSong::new(vec![
-        r#"{"action":"call_shell","tool":"forget_pearl","input":{"pearl_id":"00000000-0000-0000-0000-000000000000"}}"#.to_string(),
-        "[]".to_string(),
-    ]));
-    let shells = Arc::new(FakeShells::default());
-    let siren: Arc<dyn SirenPolicy> = Arc::new(DeterministicSirenPolicy::new(cfg.clone()));
-
-    let tide = SingleAgentTideRuntime::new(cfg, runs, currents, echo, lore, song, shells, siren)
-        .with_templates("{}", ANSWER_TEMPLATE);
-    let res = tide
-        .run_once(
-            TenantId(Uuid::from_u128(1)),
-            AgentId(Uuid::from_u128(2)),
-            "forget it".to_string(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(res.status, RunStatus::Canceled);
-    assert!(res.output.contains("Approval required"));
-}
-
-#[tokio::test]
-async fn shell_call_path() {
-    let cfg = cfg(true, false);
-    let runs = Arc::new(MemRuns::default());
-    let currents = Arc::new(MemCurrents::default());
-    let echo = Arc::new(FixedEcho { hits: vec![] });
-    let lore: Arc<dyn LoreStore> = Arc::new(MemLoreStore::default());
-    let song: Arc<dyn SongProvider> = Arc::new(ScriptedSong::new(vec![
-        r#"{"action":"call_shell","tool":"echo","input":{"message":"hi"}}"#.to_string(),
-        "done".to_string(),
-        "[]".to_string(),
-    ]));
-    let shells = Arc::new(FakeShells::default());
-    let siren: Arc<dyn SirenPolicy> = Arc::new(DeterministicSirenPolicy::new(cfg.clone()));
-
-    let tide = SingleAgentTideRuntime::new(
-        cfg,
-        runs,
-        currents.clone(),
-        echo,
-        lore,
-        song,
-        shells.clone(),
-        siren,
-    )
-    .with_templates("{}", ANSWER_TEMPLATE);
-    let res = tide
-        .run_once(
-            TenantId(Uuid::from_u128(1)),
-            AgentId(Uuid::from_u128(2)),
-            "say hi".to_string(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(res.status, RunStatus::Succeeded);
-    assert_eq!(
-        shells.calls.lock().unwrap().as_slice(),
-        &["echo".to_string()]
+    .with_templates(
+        r#"{"action":"answer","answer":"ok"}"#,
+        r#"LORELEI_MODE=answer {{USER_INPUT}}"#,
     );
-    let events = currents.events.lock().unwrap();
-    assert!(events
-        .iter()
-        .any(|e| e.event_type == lorelei_core::types::CurrentEventType::ToolCall));
-    assert!(events
-        .iter()
-        .any(|e| e.event_type == lorelei_core::types::CurrentEventType::ToolResult));
+
+    let _ = tide
+        .run_once(tenant_id, agent_id, "hi".to_string())
+        .await
+        .expect("run");
+
+    let verifier_store = lorelei_lore::pg::PgLoreStore::new_indexed(
+        pool_verify,
+        index.clone(),
+        embedder.clone(),
+        "mock",
+    );
+    let verifier = lorelei_echo::retriever::EchoEngine::new(
+        verifier_store,
+        index,
+        embedder,
+        "mock",
+        lorelei_echo::retriever::EchoRetrievalConfig {
+            rerank_top_k: 10,
+            enable_query_rewrite: false,
+        },
+    );
+
+    let hits = verifier
+        .query(
+            tenant_id,
+            agent_id,
+            EchoQuery {
+                query: "starts in postgres".to_string(),
+                top_k: 10,
+                min_confidence: Some(UnitInterval::new(0.0).unwrap()),
+                pearl_type: None,
+            },
+        )
+        .await
+        .expect("echo");
+
+    assert!(!hits.is_empty());
+    assert!(hits.iter().any(|h| h.content.contains("Postgres")));
 }

@@ -40,6 +40,10 @@ impl MockSongProvider {
         if input.contains("LORELEI_MODE=answer") {
             return "Say hello from The Song.".to_string();
         }
+        if input.contains("memory extractor") || input.contains("candidate Pearls") {
+            // Default: return no memories unless tests/scripted inputs provide otherwise.
+            return "[]".to_string();
+        }
         format!("mock: {input}")
     }
 

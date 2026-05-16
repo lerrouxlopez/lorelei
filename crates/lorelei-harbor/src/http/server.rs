@@ -204,6 +204,7 @@ pub async fn build_state() -> Result<AppState, LoreleiError> {
         runs,
         currents_trait,
         echo.clone(),
+        lore_store.clone(),
         song,
         shells.clone(),
         siren.clone(),

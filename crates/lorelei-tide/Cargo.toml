@@ -14,8 +14,13 @@ chrono = { version = "0.4", features = ["serde"] }
 tokio = { version = "1", features = ["rt", "macros"] }
 tracing = "0.1"
 tracing-futures = "0.2"
+regex = "1"
 
 [dev-dependencies]
 futures = "0.3"
 lorelei-siren = { path = "../lorelei-siren" }
 lorelei-song = { path = "../lorelei-song" }
+lorelei-echo = { path = "../lorelei-echo" }
+lorelei-lore = { path = "../lorelei-lore" }
+qdrant-client = "1"
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono", "macros"] }
