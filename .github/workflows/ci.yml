@@ -1,0 +1,72 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: cargo fmt
+        run: cargo fmt --all --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: unit tests
+        run: cargo test --workspace --all-targets
+
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: lorelei
+          POSTGRES_USER: lorelei
+          POSTGRES_PASSWORD: lorelei
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U lorelei -d lorelei"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+      qdrant:
+        image: qdrant/qdrant:v1.18.0
+        ports:
+          - 6333:6333
+          - 6334:6334
+        options: >-
+          --health-cmd "sh -lc 'exec 3<>/dev/tcp/127.0.0.1/6333'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgres://lorelei:lorelei@localhost:5432/lorelei
+      QDRANT_URL: http://localhost:6334
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: docker compose config
+        run: docker compose config -q
+      - name: integration tests (services available)
+        run: cargo test --workspace --all-targets
+

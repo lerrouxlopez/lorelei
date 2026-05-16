@@ -33,6 +33,12 @@ Lorelei aims for “iron safety”: predictable behavior, explicit boundaries, a
 - Linting and formatting gates (`cargo fmt`, `cargo clippy`) once code arrives.
 - Containerized CI job for runtime integration tests (Docker required).
 
+## Golden Suites (`lorelei-eval`)
+- Run all workspace tests: `cargo test --workspace --all-targets`
+- Run the golden suite only: `cargo test -p lorelei-eval --test golden`
+- Integration portions auto-skip unless `DATABASE_URL` and `QDRANT_URL` are set.
+- Optional Docker smoke test: `scripts/smoke-reef.sh`
+
 ## What We Will Not Do Initially
 - Fuzzing by default (can be added once interfaces stabilize).
 - Multi-agent simulation (explicitly out of scope until single-agent is reliable).
@@ -41,4 +47,3 @@ Lorelei aims for “iron safety”: predictable behavior, explicit boundaries, a
 - Avoid real secrets; use synthetic fixtures.
 - Prefer small, human-readable fixtures for memory (Echoes/Pearls).
 - Keep “golden” outputs stable by normalizing timestamps/IDs where appropriate.
-

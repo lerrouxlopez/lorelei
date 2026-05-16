@@ -385,29 +385,31 @@ impl SingleAgentTideRuntime {
         }
 
         // Reflection + memory formation (best-effort).
-        let memory_decisions = self
-            .form_memories(
-                run.run_id,
+        if enable_memory {
+            let memory_decisions = self
+                .form_memories(
+                    run.run_id,
+                    tenant_id,
+                    agent_id,
+                    &user_input,
+                    &final_output,
+                    shell_result.as_ref(),
+                    &echo_hits,
+                )
+                .instrument(info_span!("tide.memory"))
+                .await?;
+
+            self.append_current(
                 tenant_id,
                 agent_id,
-                &user_input,
-                &final_output,
-                shell_result.as_ref(),
-                &echo_hits,
+                run.run_id,
+                lorelei_core::types::EchoId(Uuid::new_v4()),
+                CurrentEventType::System,
+                "memory formation",
+                json!({ "decisions": memory_decisions }),
             )
-            .instrument(info_span!("tide.memory"))
             .await?;
-
-        self.append_current(
-            tenant_id,
-            agent_id,
-            run.run_id,
-            lorelei_core::types::EchoId(Uuid::new_v4()),
-            CurrentEventType::System,
-            "memory formation",
-            json!({ "decisions": memory_decisions }),
-        )
-        .await?;
+        }
 
         // 14. Complete run
         self.runs
