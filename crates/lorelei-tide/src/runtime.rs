@@ -96,10 +96,24 @@ impl SingleAgentTideRuntime {
         agent_id: lorelei_core::types::AgentId,
         user_input: String,
     ) -> Result<TideResult, LoreleiError> {
-        let span = info_span!("tide.run_once", tenant_id = %tenant_id.0, agent_id = %agent_id.0);
-        async move { self.run_once_inner(tenant_id, agent_id, user_input).await }
-            .instrument(span)
+        self.run_once_with_options(tenant_id, agent_id, user_input, true)
             .await
+    }
+
+    pub async fn run_once_with_options(
+        &self,
+        tenant_id: TenantId,
+        agent_id: lorelei_core::types::AgentId,
+        user_input: String,
+        enable_memory: bool,
+    ) -> Result<TideResult, LoreleiError> {
+        let span = info_span!("tide.run_once", tenant_id = %tenant_id.0, agent_id = %agent_id.0);
+        async move {
+            self.run_once_inner(tenant_id, agent_id, user_input, enable_memory)
+                .await
+        }
+        .instrument(span)
+        .await
     }
 
     async fn run_once_inner(
@@ -107,6 +121,7 @@ impl SingleAgentTideRuntime {
         tenant_id: TenantId,
         agent_id: lorelei_core::types::AgentId,
         user_input: String,
+        enable_memory: bool,
     ) -> Result<TideResult, LoreleiError> {
         // 1. Create run
         let run = self
@@ -130,20 +145,23 @@ impl SingleAgentTideRuntime {
         .await?;
 
         // 3. Echo retrieve
-        let echo_hits = self
-            .echo
-            .query(
-                tenant_id,
-                agent_id,
-                EchoQuery {
-                    query: user_input.clone(),
-                    top_k: self.config.echo.top_k,
-                    min_confidence: self.config.echo.min_confidence,
-                    pearl_type: None,
-                },
-            )
-            .instrument(info_span!("tide.echo"))
-            .await?;
+        let echo_hits = if enable_memory {
+            self.echo
+                .query(
+                    tenant_id,
+                    agent_id,
+                    EchoQuery {
+                        query: user_input.clone(),
+                        top_k: self.config.echo.top_k,
+                        min_confidence: self.config.echo.min_confidence,
+                        pearl_type: None,
+                    },
+                )
+                .instrument(info_span!("tide.echo"))
+                .await?
+        } else {
+            Vec::new()
+        };
 
         // 4-7. Planner (JSON plan + repair once)
         let (plan, planner_raw) = self

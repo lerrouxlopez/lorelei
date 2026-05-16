@@ -5,6 +5,7 @@ WORKDIR /app
 
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
+COPY prompts ./prompts
 
 RUN cargo build --release -p lorelei-cli
 
@@ -18,4 +19,3 @@ COPY --from=build /app/target/release/lore /usr/local/bin/lore
 RUN ln -sf /usr/local/bin/lore /usr/local/bin/lori
 
 ENTRYPOINT ["lore"]
-

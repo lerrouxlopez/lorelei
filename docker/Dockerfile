@@ -6,6 +6,7 @@ WORKDIR /app
 # Cache deps first
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
+COPY prompts ./prompts
 
 RUN cargo build --release -p lorelei-harbor
 

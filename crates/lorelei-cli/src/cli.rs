@@ -20,6 +20,8 @@ pub enum Command {
     Memo(MemoArgs),
     /// Retrieve Pearls from the Echo (RAG) via Harbor
     Echo(EchoArgs),
+    /// Ask The Song (runs the Tide loop via Harbor)
+    Ask(AskArgs),
     /// List Pearls via Harbor
     Pearls(PearlsArgs),
     /// Soft-delete a Pearl via Harbor
@@ -88,6 +90,19 @@ pub struct EchoArgs {
     pub min_confidence: Option<f64>,
     #[arg(long)]
     pub pearl_type: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct AskArgs {
+    #[command(flatten)]
+    pub config: ConfigArgs,
+    #[command(flatten)]
+    pub harbor: HarborArgs,
+    /// Disable memory retrieval (Echo)
+    #[arg(long)]
+    pub no_memory: bool,
+    /// User prompt
+    pub prompt: String,
 }
 
 #[derive(Debug, Args)]
@@ -172,6 +187,18 @@ mod tests {
         match cli.command {
             Command::Shells(_) => {}
             _ => panic!("expected shells"),
+        }
+    }
+
+    #[test]
+    fn clap_parses_ask() {
+        let cli = Cli::try_parse_from(["lore", "ask", "--no-memory", "hello"]).unwrap();
+        match cli.command {
+            Command::Ask(a) => {
+                assert!(a.no_memory);
+                assert_eq!(a.prompt, "hello");
+            }
+            _ => panic!("expected ask"),
         }
     }
 

@@ -42,6 +42,13 @@ pub async fn run(cli: Cli) -> i32 {
                 1
             }
         },
+        Command::Ask(args) => match cmd_ask(args).await {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("{e}");
+                1
+            }
+        },
         Command::Pearls(args) => match cmd_pearls(args).await {
             Ok(()) => 0,
             Err(e) => {
@@ -254,6 +261,23 @@ struct EchoHitResponse {
     created_at: String,
 }
 
+#[derive(Debug, Serialize)]
+struct CreateRunRequest {
+    tenant_id: Uuid,
+    agent_id: Uuid,
+    input: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    no_memory: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct RunResponse {
+    run_id: Uuid,
+    status: lorelei_core::types::RunStatus,
+    output: Option<String>,
+}
+
 async fn cmd_echo(args: EchoArgs) -> Result<(), String> {
     let cfg = LoreleiConfig::load_from_toml_path(&args.config.config)
         .map_err(|e| format!("config invalid: {e}"))?;
@@ -297,6 +321,31 @@ async fn cmd_echo(args: EchoArgs) -> Result<(), String> {
             h.content
         );
     }
+    Ok(())
+}
+
+async fn cmd_ask(args: AskArgs) -> Result<(), String> {
+    let cfg = LoreleiConfig::load_from_toml_path(&args.config.config)
+        .map_err(|e| format!("config invalid: {e}"))?;
+
+    let harbor_url = HarborClient::default_base_url(args.harbor.harbor_url);
+    let harbor = HarborClient::new(harbor_url)?;
+
+    let created: RunResponse = harbor
+        .post_json(
+            "/v1/runs",
+            &CreateRunRequest {
+                tenant_id: cfg.agent.tenant_id.0,
+                agent_id: cfg.agent.agent_id.0,
+                input: args.prompt,
+                no_memory: if args.no_memory { Some(true) } else { None },
+            },
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let output = created.output.unwrap_or_default();
+    println!("{output}");
     Ok(())
 }
 

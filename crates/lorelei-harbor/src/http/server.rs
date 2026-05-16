@@ -529,6 +529,8 @@ pub struct CreateRunRequest {
     pub tenant_id: Uuid,
     pub agent_id: Uuid,
     pub input: String,
+    #[serde(default)]
+    pub no_memory: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -549,10 +551,11 @@ async fn create_run(
     let request_id = request_id_from_headers_or_ext(&headers, Some(&rid));
     let res = state
         .tide
-        .run_once(
+        .run_once_with_options(
             lorelei_core::types::TenantId(body.tenant_id),
             lorelei_core::types::AgentId(body.agent_id),
             body.input,
+            !body.no_memory,
         )
         .await
         .map_err(|e| map_err(e, request_id))?;
