@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+use crate::runtime::autonomy::PgAutonomy;
 use crate::runtime::pg::PgCurrentStore;
 use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
@@ -11,7 +12,8 @@ use lorelei_core::config::LoreleiConfig;
 use lorelei_core::error::LoreleiError;
 use lorelei_core::traits::{CurrentStore, EchoRetriever, LoreStore};
 use lorelei_core::types::{
-    EchoQuery, NewPearl, PearlListQuery, PearlType, RunStatus, UnitInterval,
+    ApprovalState, AutonomousTaskId, EchoQuery, NewPearl, PearlListQuery, PearlType, RunStatus,
+    ShellRisk, UnitInterval,
 };
 use lorelei_echo::retriever::{EchoEngine, EchoRetrievalConfig};
 use lorelei_lore::embedding::{DynSongProviderEmbeddingAdapter, EmbeddingProvider};
@@ -24,6 +26,7 @@ use lorelei_song::registry::ProviderRegistry;
 use lorelei_tide::runtime::SingleAgentTideRuntime;
 use qdrant_client::Qdrant;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sqlx::PgPool;
 use std::sync::Arc;
 use tracing::info;
@@ -42,6 +45,7 @@ pub struct AppState {
     pub currents: Arc<PgCurrentStore>,
     pub siren: Arc<DeterministicSirenPolicy>,
     pub tide: Arc<SingleAgentTideRuntime>,
+    pub autonomy: Arc<PgAutonomy>,
 }
 
 #[derive(Debug, Serialize)]
@@ -116,6 +120,11 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/providers", get(list_providers))
         .route("/v1/shells", get(list_shells))
         .route("/v1/runs/:run_id/currents", get(list_currents))
+        .route("/v1/tasks", post(create_task).get(list_tasks))
+        .route("/v1/tasks/:task_id/pause", post(pause_task))
+        .route("/v1/tasks/:task_id/resume", post(resume_task))
+        .route("/v1/approvals", get(list_approvals))
+        .route("/v1/approvals/:approval_id/approve", post(approve_approval))
         .layer(middleware::from_fn(request_id_middleware))
         .with_state(state)
 }
@@ -194,7 +203,10 @@ pub async fn build_state() -> Result<AppState, LoreleiError> {
         .with_current_id_provider(|call| Some(call.call_id)),
     );
 
-    let siren = Arc::new(DeterministicSirenPolicy::new(config.clone()));
+    let autonomy = Arc::new(PgAutonomy::new(pg_pool.clone()));
+    let siren = Arc::new(
+        DeterministicSirenPolicy::new(config.clone()).with_approval_store(autonomy.clone()),
+    );
     let song = providers.get(&config.agent.default_provider)?;
     let runs: Arc<dyn lorelei_tide::runtime::RunRepository> = currents.clone();
     let currents_trait: Arc<dyn lorelei_core::traits::CurrentStore> = currents.clone();
@@ -222,6 +234,7 @@ pub async fn build_state() -> Result<AppState, LoreleiError> {
         currents,
         siren,
         tide,
+        autonomy,
     })
 }
 
@@ -523,6 +536,253 @@ async fn list_providers(State(state): State<AppState>) -> impl IntoResponse {
 
 async fn list_shells(State(state): State<AppState>) -> impl IntoResponse {
     Json(state.shells.specs())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateTaskRequest {
+    pub tenant_id: Uuid,
+    pub agent_id: Uuid,
+    pub prompt: String,
+    #[serde(default)]
+    pub daily: bool,
+    pub at: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TaskResponse {
+    pub task_id: Uuid,
+    pub tenant_id: Uuid,
+    pub agent_id: Uuid,
+    pub prompt: String,
+    pub status: lorelei_core::types::TaskStatus,
+    pub schedule: lorelei_core::types::TaskSchedule,
+    pub next_run_at: String,
+    pub last_run_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+async fn create_task(
+    State(state): State<AppState>,
+    axum::extract::Extension(rid): axum::extract::Extension<RequestId>,
+    headers: HeaderMap,
+    Json(body): Json<CreateTaskRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let request_id = request_id_from_headers_or_ext(&headers, Some(&rid));
+
+    if !body.daily {
+        return Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            code: "bad_request",
+            message: "only --daily schedules are supported in v1".to_string(),
+            request_id,
+        });
+    }
+    let Some(at) = body.at.as_deref() else {
+        return Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            code: "bad_request",
+            message: "at is required for daily schedule (HH:MM)".to_string(),
+            request_id,
+        });
+    };
+
+    let task = state
+        .autonomy
+        .add_daily_task(
+            lorelei_core::types::TenantId(body.tenant_id),
+            lorelei_core::types::AgentId(body.agent_id),
+            &body.prompt,
+            at,
+        )
+        .await
+        .map_err(|e| map_err(e, request_id))?;
+
+    Ok((StatusCode::CREATED, Json(to_task_response(task))))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ListTasksQuery {
+    pub tenant_id: Uuid,
+    pub agent_id: Option<Uuid>,
+}
+
+async fn list_tasks(
+    State(state): State<AppState>,
+    axum::extract::Extension(rid): axum::extract::Extension<RequestId>,
+    headers: HeaderMap,
+    Query(q): Query<ListTasksQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let request_id = request_id_from_headers_or_ext(&headers, Some(&rid));
+    let tasks = state
+        .autonomy
+        .list_tasks(
+            lorelei_core::types::TenantId(q.tenant_id),
+            q.agent_id.map(lorelei_core::types::AgentId),
+        )
+        .await
+        .map_err(|e| map_err(e, request_id))?;
+
+    let out: Vec<TaskResponse> = tasks.into_iter().map(to_task_response).collect();
+    Ok(Json(out))
+}
+
+async fn pause_task(
+    State(state): State<AppState>,
+    axum::extract::Extension(rid): axum::extract::Extension<RequestId>,
+    headers: HeaderMap,
+    Path(task_id): Path<Uuid>,
+    Query(q): Query<std::collections::HashMap<String, String>>,
+) -> Result<impl IntoResponse, ApiError> {
+    let request_id = request_id_from_headers_or_ext(&headers, Some(&rid));
+    let tenant_id = q
+        .get("tenant_id")
+        .and_then(|s| Uuid::parse_str(s).ok())
+        .ok_or_else(|| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            code: "bad_request",
+            message: "tenant_id query param required".to_string(),
+            request_id,
+        })?;
+
+    state
+        .autonomy
+        .pause_task(
+            lorelei_core::types::TenantId(tenant_id),
+            AutonomousTaskId(task_id),
+        )
+        .await
+        .map_err(|e| map_err(e, request_id))?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn resume_task(
+    State(state): State<AppState>,
+    axum::extract::Extension(rid): axum::extract::Extension<RequestId>,
+    headers: HeaderMap,
+    Path(task_id): Path<Uuid>,
+    Query(q): Query<std::collections::HashMap<String, String>>,
+) -> Result<impl IntoResponse, ApiError> {
+    let request_id = request_id_from_headers_or_ext(&headers, Some(&rid));
+    let tenant_id = q
+        .get("tenant_id")
+        .and_then(|s| Uuid::parse_str(s).ok())
+        .ok_or_else(|| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            code: "bad_request",
+            message: "tenant_id query param required".to_string(),
+            request_id,
+        })?;
+
+    state
+        .autonomy
+        .resume_task(
+            lorelei_core::types::TenantId(tenant_id),
+            AutonomousTaskId(task_id),
+        )
+        .await
+        .map_err(|e| map_err(e, request_id))?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ListApprovalsQuery {
+    pub tenant_id: Uuid,
+    pub state: Option<ApprovalState>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ApprovalResponse {
+    pub approval_id: Uuid,
+    pub tenant_id: Uuid,
+    pub agent_id: Uuid,
+    pub task_id: Option<Uuid>,
+    pub run_id: Uuid,
+    pub tool: String,
+    pub input: Value,
+    pub risk: ShellRisk,
+    pub state: ApprovalState,
+    pub approval_prompt: String,
+    pub created_at: String,
+    pub decided_at: Option<String>,
+}
+
+async fn list_approvals(
+    State(state): State<AppState>,
+    axum::extract::Extension(rid): axum::extract::Extension<RequestId>,
+    headers: HeaderMap,
+    Query(q): Query<ListApprovalsQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let request_id = request_id_from_headers_or_ext(&headers, Some(&rid));
+    let approvals = state
+        .autonomy
+        .list_approvals(lorelei_core::types::TenantId(q.tenant_id), q.state)
+        .await
+        .map_err(|e| map_err(e, request_id))?;
+
+    let out: Vec<ApprovalResponse> = approvals
+        .into_iter()
+        .map(|a| ApprovalResponse {
+            approval_id: a.approval_id.0,
+            tenant_id: a.tenant_id.0,
+            agent_id: a.agent_id.0,
+            task_id: a.task_id.map(|t| t.0),
+            run_id: a.run_id.0,
+            tool: a.tool,
+            input: a.input,
+            risk: a.risk,
+            state: a.state,
+            approval_prompt: a.approval_prompt,
+            created_at: a.created_at.to_rfc3339(),
+            decided_at: a.decided_at.map(|d| d.to_rfc3339()),
+        })
+        .collect();
+
+    Ok(Json(out))
+}
+
+async fn approve_approval(
+    State(state): State<AppState>,
+    axum::extract::Extension(rid): axum::extract::Extension<RequestId>,
+    headers: HeaderMap,
+    Path(approval_id): Path<Uuid>,
+    Query(q): Query<std::collections::HashMap<String, String>>,
+) -> Result<impl IntoResponse, ApiError> {
+    let request_id = request_id_from_headers_or_ext(&headers, Some(&rid));
+    let tenant_id = q
+        .get("tenant_id")
+        .and_then(|s| Uuid::parse_str(s).ok())
+        .ok_or_else(|| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            code: "bad_request",
+            message: "tenant_id query param required".to_string(),
+            request_id,
+        })?;
+
+    state
+        .autonomy
+        .approve(
+            lorelei_core::types::TenantId(tenant_id),
+            lorelei_core::types::ApprovalId(approval_id),
+        )
+        .await
+        .map_err(|e| map_err(e, request_id))?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+fn to_task_response(task: lorelei_core::types::AutonomousTask) -> TaskResponse {
+    TaskResponse {
+        task_id: task.task_id.0,
+        tenant_id: task.tenant_id.0,
+        agent_id: task.agent_id.0,
+        prompt: task.prompt,
+        status: task.status,
+        schedule: task.schedule,
+        next_run_at: task.next_run_at.to_rfc3339(),
+        last_run_at: task.last_run_at.map(|d| d.to_rfc3339()),
+        created_at: task.created_at.to_rfc3339(),
+        updated_at: task.updated_at.to_rfc3339(),
+    }
 }
 
 #[derive(Debug, Deserialize)]

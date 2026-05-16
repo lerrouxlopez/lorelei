@@ -11,6 +11,7 @@ use lorelei_core::types::{
 };
 use lorelei_echo::retriever::{EchoEngine, EchoRetrievalConfig};
 use lorelei_harbor::http::server::{router, AppState};
+use lorelei_harbor::runtime::autonomy::PgAutonomy;
 use lorelei_harbor::runtime::pg::PgCurrentStore;
 use lorelei_lore::pg::PgLoreStore;
 use lorelei_shells::registry::BuiltinShellRegistry;
@@ -192,6 +193,8 @@ fn minimal_state() -> AppState {
         siren.clone(),
     ));
 
+    let autonomy = Arc::new(PgAutonomy::new(pg_pool.clone()));
+
     AppState {
         config: cfg,
         pg_pool,
@@ -206,6 +209,7 @@ fn minimal_state() -> AppState {
         currents,
         siren,
         tide,
+        autonomy,
     }
 }
 
@@ -316,6 +320,8 @@ async fn env_state() -> Option<AppState> {
         siren.clone(),
     ));
 
+    let autonomy = Arc::new(PgAutonomy::new(pg_pool.clone()));
+
     Some(AppState {
         config: cfg,
         pg_pool,
@@ -328,6 +334,7 @@ async fn env_state() -> Option<AppState> {
         currents,
         siren,
         tide,
+        autonomy,
     })
 }
 

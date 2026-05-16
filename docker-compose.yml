@@ -69,6 +69,22 @@ services:
       timeout: 5s
       retries: 12
 
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    depends_on:
+      harbor:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      LORELEI_CONFIG: ${LORELEI_CONFIG:-/app/lorelei.toml}
+      DATABASE_URL: ${DATABASE_URL:-postgres://lorelei:lorelei@postgres:5432/lorelei}
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6334}
+      RUST_LOG: ${RUST_LOG:-info}
+    command: ["lorelei-harbor", "worker"]
+
 volumes:
   lorelei_postgres_data:
   lorelei_qdrant_data:

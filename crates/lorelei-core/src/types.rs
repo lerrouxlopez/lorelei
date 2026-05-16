@@ -354,3 +354,64 @@ pub struct PearlListQuery {
     pub limit: Option<usize>,
     pub include_deleted: bool,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct AutonomousTaskId(pub Uuid);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ApprovalId(pub Uuid);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TaskStatus {
+    Active,
+    Paused,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TaskSchedule {
+    Daily { at_hhmm: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskRunLink {
+    pub task_id: AutonomousTaskId,
+    pub run_id: RunId,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ApprovalState {
+    Pending,
+    Approved,
+    Denied,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AutonomousTask {
+    pub task_id: AutonomousTaskId,
+    pub tenant_id: TenantId,
+    pub agent_id: AgentId,
+    pub prompt: String,
+    pub status: TaskStatus,
+    pub schedule: TaskSchedule,
+    pub next_run_at: DateTime<Utc>,
+    pub last_run_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ApprovalRequest {
+    pub approval_id: ApprovalId,
+    pub tenant_id: TenantId,
+    pub agent_id: AgentId,
+    pub task_id: Option<AutonomousTaskId>,
+    pub run_id: RunId,
+    pub tool: String,
+    pub input: Value,
+    pub risk: ShellRisk,
+    pub state: ApprovalState,
+    pub approval_prompt: String,
+    pub created_at: DateTime<Utc>,
+    pub decided_at: Option<DateTime<Utc>>,
+}

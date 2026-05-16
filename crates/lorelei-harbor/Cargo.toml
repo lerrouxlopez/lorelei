@@ -25,6 +25,7 @@ tower-http = { version = "0.6", features = ["trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 qdrant-client = "1.18"
+clap = { version = "4", features = ["derive"] }
 
 [[bin]]
 name = "lorelei-harbor"
@@ -33,3 +34,4 @@ path = "src/main.rs"
 [dev-dependencies]
 tower = "0.5"
 hyper = "1"
+futures = "0.3"

@@ -128,8 +128,36 @@ impl SingleAgentTideRuntime {
     ) -> Result<TideResult, LoreleiError> {
         let span = info_span!("tide.run_once", tenant_id = %tenant_id.0, agent_id = %agent_id.0);
         async move {
-            self.run_once_inner(tenant_id, agent_id, user_input, enable_memory)
+            self.run_once_inner(tenant_id, agent_id, None, user_input, enable_memory)
                 .await
+        }
+        .instrument(span)
+        .await
+    }
+
+    pub async fn run_task_once_with_options(
+        &self,
+        tenant_id: TenantId,
+        agent_id: lorelei_core::types::AgentId,
+        task_id: lorelei_core::types::AutonomousTaskId,
+        user_input: String,
+        enable_memory: bool,
+    ) -> Result<TideResult, LoreleiError> {
+        let span = info_span!(
+            "tide.run_task_once",
+            tenant_id = %tenant_id.0,
+            agent_id = %agent_id.0,
+            task_id = %task_id.0
+        );
+        async move {
+            self.run_once_inner(
+                tenant_id,
+                agent_id,
+                Some(task_id),
+                user_input,
+                enable_memory,
+            )
+            .await
         }
         .instrument(span)
         .await
@@ -139,6 +167,7 @@ impl SingleAgentTideRuntime {
         &self,
         tenant_id: TenantId,
         agent_id: lorelei_core::types::AgentId,
+        task_id: Option<lorelei_core::types::AutonomousTaskId>,
         user_input: String,
         enable_memory: bool,
     ) -> Result<TideResult, LoreleiError> {
@@ -250,6 +279,7 @@ impl SingleAgentTideRuntime {
                         tenant_id,
                         agent_id,
                         run.run_id,
+                        task_id,
                         &request,
                         &response,
                         &tool_calls,
@@ -319,6 +349,25 @@ impl SingleAgentTideRuntime {
                         reasoning_summary,
                         approval_prompt,
                     } => {
+                        // Emit a structured current so workers/clients can create an approval request.
+                        self.append_current(
+                            tenant_id,
+                            agent_id,
+                            run.run_id,
+                            lorelei_core::types::EchoId(Uuid::new_v4()),
+                            CurrentEventType::System,
+                            "approval required",
+                            json!({
+                                "tool": tool,
+                                "input": input,
+                                "risk": shell_risk(&tool),
+                                "reasoning_summary": reasoning_summary,
+                                "approval_prompt": approval_prompt,
+                            }),
+                        )
+                        .instrument(info_span!("tide.current_approval_required"))
+                        .await?;
+
                         final_output = format!(
                             "run_id={}\nApproval required: {}\n\n{}",
                             run.run_id.0, reasoning_summary, approval_prompt

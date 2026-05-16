@@ -3,15 +3,19 @@
 use async_trait::async_trait;
 use lorelei_core::config::LoreleiConfig;
 use lorelei_core::error::LoreleiError;
+use lorelei_core::traits::ApprovalStore;
 use lorelei_core::traits::SirenPolicy;
 use lorelei_core::types::{
-    AgentId, NormalizedToolCall, RunId, SirenDecision, SongRequest, SongResponse, TenantId,
+    AgentId, AutonomousTaskId, NormalizedToolCall, RunId, SirenDecision, SongRequest, SongResponse,
+    TenantId,
 };
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct DeterministicSirenPolicy {
     config: LoreleiConfig,
     enable_llm_policy: bool,
+    approvals: Option<Arc<dyn ApprovalStore>>,
 }
 
 impl DeterministicSirenPolicy {
@@ -19,7 +23,13 @@ impl DeterministicSirenPolicy {
         Self {
             config,
             enable_llm_policy: false,
+            approvals: None,
         }
+    }
+
+    pub fn with_approval_store(mut self, store: Arc<dyn ApprovalStore>) -> Self {
+        self.approvals = Some(store);
+        self
     }
 
     pub fn with_llm_policy_enabled(mut self, enabled: bool) -> Self {
@@ -73,11 +83,13 @@ impl DeterministicSirenPolicy {
             || msg.contains("delete")
     }
 
-    fn deterministic_decision(
+    #[allow(clippy::too_many_arguments)]
+    async fn deterministic_decision(
         &self,
         tenant_id: TenantId,
         agent_id: AgentId,
         _run_id: RunId,
+        task_id: Option<AutonomousTaskId>,
         request: &SongRequest,
         tool_calls: &[NormalizedToolCall],
         shell_names: &[String],
@@ -117,11 +129,32 @@ impl DeterministicSirenPolicy {
             });
         }
 
-        // High-risk tools require explicit approval.
+        // High-risk tools require explicit approval (unless already approved for this task).
         if requested_tools
             .iter()
             .any(|t| self.high_risk_tools().contains(&t.as_str()))
         {
+            if let Some(store) = &self.approvals {
+                // If all high-risk tool calls are approved, allow.
+                let mut all_ok = true;
+                for call in tool_calls
+                    .iter()
+                    .filter(|c| self.high_risk_tools().contains(&c.name.as_str()))
+                {
+                    let ok = store
+                        .is_approved(tenant_id, agent_id, task_id, &call.name, &call.arguments)
+                        .await?;
+                    if !ok {
+                        all_ok = false;
+                        break;
+                    }
+                }
+                if all_ok {
+                    return Ok(SirenDecision::Allow {
+                        reasoning_summary: "approved high-risk tool".to_string(),
+                    });
+                }
+            }
             let prompt = self.approval_prompt(request, &requested_tools);
             return Ok(SirenDecision::RequireApproval {
                 reasoning_summary: "high-risk tool requires explicit approval".to_string(),
@@ -173,19 +206,23 @@ impl SirenPolicy for DeterministicSirenPolicy {
         tenant_id: TenantId,
         agent_id: AgentId,
         run_id: RunId,
+        task_id: Option<AutonomousTaskId>,
         request: &SongRequest,
         _response: &SongResponse,
         tool_calls: &[NormalizedToolCall],
         shell_names: &[String],
     ) -> Result<SirenDecision, LoreleiError> {
-        let det = self.deterministic_decision(
-            tenant_id,
-            agent_id,
-            run_id,
-            request,
-            tool_calls,
-            shell_names,
-        )?;
+        let det = self
+            .deterministic_decision(
+                tenant_id,
+                agent_id,
+                run_id,
+                task_id,
+                request,
+                tool_calls,
+                shell_names,
+            )
+            .await?;
 
         if !self.enable_llm_policy {
             return Ok(det);

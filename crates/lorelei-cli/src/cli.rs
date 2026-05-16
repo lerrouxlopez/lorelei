@@ -30,6 +30,12 @@ pub enum Command {
     Providers(HarborArgs),
     /// List available Shell tools (via Harbor)
     Shells(HarborArgs),
+    /// Manage autonomous tasks
+    Task(TaskArgs),
+    /// List pending/decided approvals
+    Approvals(ApprovalsArgs),
+    /// Approve a pending approval
+    Approve(ApproveArgs),
     /// Reef (docker compose) operations
     Reef {
         #[command(subcommand)]
@@ -37,6 +43,69 @@ pub enum Command {
     },
     /// Build the Docker image(s)
     Ship(ShipArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct TaskArgs {
+    #[command(flatten)]
+    pub config: ConfigArgs,
+    #[command(flatten)]
+    pub harbor: HarborArgs,
+    #[command(subcommand)]
+    pub command: TaskCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum TaskCommand {
+    Add(TaskAddArgs),
+    List(TaskListArgs),
+    Pause(TaskPauseArgs),
+    Resume(TaskResumeArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct TaskAddArgs {
+    pub prompt: String,
+    #[arg(long, default_value_t = false)]
+    pub daily: bool,
+    /// Time for daily schedule (HH:MM)
+    #[arg(long)]
+    pub at: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct TaskListArgs {
+    #[arg(long)]
+    pub agent_id: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct TaskPauseArgs {
+    pub task_id: String,
+}
+
+#[derive(Debug, Args)]
+pub struct TaskResumeArgs {
+    pub task_id: String,
+}
+
+#[derive(Debug, Args)]
+pub struct ApprovalsArgs {
+    #[command(flatten)]
+    pub config: ConfigArgs,
+    #[command(flatten)]
+    pub harbor: HarborArgs,
+    #[arg(long)]
+    pub state: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct ApproveArgs {
+    #[command(flatten)]
+    pub config: ConfigArgs,
+    #[command(flatten)]
+    pub harbor: HarborArgs,
+    pub approval_id: String,
 }
 
 #[derive(Debug, Args, Clone)]
@@ -214,6 +283,30 @@ mod tests {
                 assert_eq!(a.tail, 50);
             }
             _ => panic!("expected reef logs"),
+        }
+    }
+
+    #[test]
+    fn clap_parses_task_add_daily_at() {
+        let cli = Cli::try_parse_from([
+            "lore",
+            "task",
+            "add",
+            "do the thing",
+            "--daily",
+            "--at",
+            "09:00",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Task(t) => match t.command {
+                TaskCommand::Add(a) => {
+                    assert!(a.daily);
+                    assert_eq!(a.at.as_deref(), Some("09:00"));
+                }
+                _ => panic!("expected task add"),
+            },
+            _ => panic!("expected task"),
         }
     }
 }

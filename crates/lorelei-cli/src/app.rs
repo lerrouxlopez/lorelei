@@ -77,6 +77,27 @@ pub async fn run(cli: Cli) -> i32 {
                 1
             }
         },
+        Command::Task(args) => match cmd_task(args).await {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("{e}");
+                1
+            }
+        },
+        Command::Approvals(args) => match cmd_approvals(args).await {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("{e}");
+                1
+            }
+        },
+        Command::Approve(args) => match cmd_approve(args).await {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("{e}");
+                1
+            }
+        },
         Command::Reef { command } => match cmd_reef(command) {
             Ok(code) => code,
             Err(e) => {
@@ -420,6 +441,156 @@ async fn cmd_shells(args: HarborArgs) -> Result<(), String> {
         "{}",
         serde_json::to_string_pretty(&shells).unwrap_or_else(|_| "[]".to_string())
     );
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct TaskResponse {
+    task_id: Uuid,
+    tenant_id: Uuid,
+    agent_id: Uuid,
+    prompt: String,
+    status: lorelei_core::types::TaskStatus,
+    schedule: lorelei_core::types::TaskSchedule,
+    next_run_at: String,
+    last_run_at: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CreateTaskRequest {
+    tenant_id: Uuid,
+    agent_id: Uuid,
+    prompt: String,
+    daily: bool,
+    at: Option<String>,
+}
+
+async fn cmd_task(args: TaskArgs) -> Result<(), String> {
+    let cfg = LoreleiConfig::load_from_toml_path(&args.config.config)
+        .map_err(|e| format!("config invalid: {e}"))?;
+
+    let harbor_url = HarborClient::default_base_url(args.harbor.harbor_url);
+    let harbor = HarborClient::new(harbor_url)?;
+
+    match args.command {
+        TaskCommand::Add(a) => {
+            let task: TaskResponse = harbor
+                .post_json(
+                    "/v1/tasks",
+                    &CreateTaskRequest {
+                        tenant_id: cfg.agent.tenant_id.0,
+                        agent_id: cfg.agent.agent_id.0,
+                        prompt: a.prompt,
+                        daily: a.daily,
+                        at: a.at,
+                    },
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+            println!(
+                "task {}\t{:?}\t{}\t{}",
+                task.task_id, task.status, task.next_run_at, task.prompt
+            );
+            Ok(())
+        }
+        TaskCommand::List(a) => {
+            let mut path = format!("/v1/tasks?tenant_id={}", cfg.agent.tenant_id.0);
+            if let Some(agent_id) = a.agent_id {
+                path.push_str("&agent_id=");
+                path.push_str(&agent_id);
+            }
+            let tasks: Vec<TaskResponse> =
+                harbor.get_json(&path).await.map_err(|e| e.to_string())?;
+            for t in tasks {
+                println!(
+                    "{}\t{:?}\t{}\t{}",
+                    t.task_id, t.status, t.next_run_at, t.prompt
+                );
+            }
+            Ok(())
+        }
+        TaskCommand::Pause(a) => {
+            let tenant = cfg.agent.tenant_id.0;
+            let path = format!("/v1/tasks/{}/pause?tenant_id={}", a.task_id, tenant);
+            let _: serde_json::Value = harbor
+                .post_json(&path, &serde_json::json!({}))
+                .await
+                .map_err(|e| e.to_string())?;
+            println!("paused task: {}", a.task_id);
+            Ok(())
+        }
+        TaskCommand::Resume(a) => {
+            let tenant = cfg.agent.tenant_id.0;
+            let path = format!("/v1/tasks/{}/resume?tenant_id={}", a.task_id, tenant);
+            let _: serde_json::Value = harbor
+                .post_json(&path, &serde_json::json!({}))
+                .await
+                .map_err(|e| e.to_string())?;
+            println!("resumed task: {}", a.task_id);
+            Ok(())
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct ApprovalResponse {
+    approval_id: Uuid,
+    tenant_id: Uuid,
+    agent_id: Uuid,
+    task_id: Option<Uuid>,
+    run_id: Uuid,
+    tool: String,
+    risk: lorelei_core::types::ShellRisk,
+    state: lorelei_core::types::ApprovalState,
+    approval_prompt: String,
+    created_at: String,
+    decided_at: Option<String>,
+}
+
+async fn cmd_approvals(args: ApprovalsArgs) -> Result<(), String> {
+    let cfg = LoreleiConfig::load_from_toml_path(&args.config.config)
+        .map_err(|e| format!("config invalid: {e}"))?;
+
+    let harbor_url = HarborClient::default_base_url(args.harbor.harbor_url);
+    let harbor = HarborClient::new(harbor_url)?;
+
+    let mut path = format!("/v1/approvals?tenant_id={}", cfg.agent.tenant_id.0);
+    if let Some(state) = args.state {
+        path.push_str("&state=");
+        path.push_str(&state);
+    }
+    let approvals: Vec<ApprovalResponse> =
+        harbor.get_json(&path).await.map_err(|e| e.to_string())?;
+    for a in approvals {
+        println!(
+            "{}\t{:?}\t{:?}\t{}\t{}",
+            a.approval_id, a.state, a.risk, a.tool, a.created_at
+        );
+    }
+    Ok(())
+}
+
+async fn cmd_approve(args: ApproveArgs) -> Result<(), String> {
+    let cfg = LoreleiConfig::load_from_toml_path(&args.config.config)
+        .map_err(|e| format!("config invalid: {e}"))?;
+
+    let harbor_url = HarborClient::default_base_url(args.harbor.harbor_url);
+    let harbor = HarborClient::new(harbor_url)?;
+
+    let tenant = cfg.agent.tenant_id.0;
+    let path = format!(
+        "/v1/approvals/{}/approve?tenant_id={}",
+        args.approval_id, tenant
+    );
+    let _: serde_json::Value = harbor
+        .post_json(&path, &serde_json::json!({}))
+        .await
+        .map_err(|e| e.to_string())?;
+    println!("approved: {}", args.approval_id);
     Ok(())
 }
 

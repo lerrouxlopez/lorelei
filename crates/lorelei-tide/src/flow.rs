@@ -51,6 +51,7 @@ impl TideShellExecutor {
                 call.tenant_id,
                 call.agent_id,
                 call.run_id,
+                None,
                 &request,
                 &response,
                 &tool_calls,

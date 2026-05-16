@@ -108,6 +108,7 @@ pub trait SirenPolicy: Send + Sync {
         tenant_id: TenantId,
         agent_id: AgentId,
         run_id: RunId,
+        task_id: Option<crate::types::AutonomousTaskId>,
         request: &SongRequest,
         response: &SongResponse,
         tool_calls: &[NormalizedToolCall],
@@ -118,4 +119,16 @@ pub trait SirenPolicy: Send + Sync {
 #[async_trait]
 pub trait TideRunner: Send + Sync {
     async fn start_run(&self, tenant_id: TenantId, agent_id: AgentId) -> Result<Run, LoreleiError>;
+}
+
+#[async_trait]
+pub trait ApprovalStore: Send + Sync {
+    async fn is_approved(
+        &self,
+        tenant_id: TenantId,
+        agent_id: AgentId,
+        task_id: Option<crate::types::AutonomousTaskId>,
+        tool: &str,
+        input: &serde_json::Value,
+    ) -> Result<bool, LoreleiError>;
 }
