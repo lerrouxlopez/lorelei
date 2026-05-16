@@ -1,7 +1,20 @@
-# Placeholder Dockerfile.
-# The Dockerized runtime and Reef wiring will be implemented in future milestones.
+# Builds and runs the Lorelei Harbor HTTP API.
 
-FROM debian:bookworm-slim
+FROM rust:1.86-bookworm AS build
+WORKDIR /app
 
-CMD ["sh", "-lc", "echo Lorelei Docker placeholder; sleep infinity"]
+# Cache deps first
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
 
+RUN cargo build --release -p lorelei-harbor
+
+FROM debian:bookworm-slim AS runtime
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates wget && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /app/target/release/lorelei-harbor /usr/local/bin/lorelei-harbor
+COPY lorelei.toml.example /app/lorelei.toml
+
+EXPOSE 7331
+CMD ["lorelei-harbor"]

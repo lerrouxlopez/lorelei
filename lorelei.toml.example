@@ -15,8 +15,8 @@ host = "127.0.0.1"
 port = 7331
 
 [lore]
-postgres_url_env = "LORELEI_POSTGRES_URL"
-qdrant_url_env = "LORELEI_QDRANT_URL"
+postgres_url_env = "DATABASE_URL"
+qdrant_url_env = "QDRANT_URL"
 collection = "lorelei"
 
 [echo]
@@ -35,4 +35,3 @@ base_url = "http://127.0.0.1:0"
 api_key_env = "LORELEI_MOCK_API_KEY"
 chat_model = "mock-chat"
 embedding_model = "mock-embed"
-

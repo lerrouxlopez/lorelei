@@ -43,8 +43,31 @@ services:
       timeout: 5s
       retries: 12
 
+  harbor:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      # Defaults for compose network; safe to override via `.env`
+      DATABASE_URL: ${DATABASE_URL:-postgres://lorelei:lorelei@postgres:5432/lorelei}
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6334}
+      RUST_LOG: ${RUST_LOG:-info}
+    ports:
+      - "7331:7331"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:7331/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
 volumes:
   lorelei_postgres_data:
   lorelei_qdrant_data:
   lorelei_ollama_data:
-
