@@ -3,9 +3,14 @@
 use lorelei_core::config::LoreleiConfig;
 use lorelei_core::traits::LoreStore;
 use lorelei_core::types::{NewPearl, PearlListQuery, PearlType, UnitInterval};
+use lorelei_lore::echo::resolve_hits;
+use lorelei_lore::embedding::{DeterministicMockEmbeddingProvider, EmbeddingProvider};
 use lorelei_lore::pg::PgLoreStore;
+use lorelei_lore::qdrant::QdrantPearlIndex;
+use qdrant_client::Qdrant;
 use sqlx::postgres::PgPoolOptions;
 use std::path::PathBuf;
+use std::sync::Arc;
 use uuid::Uuid;
 
 pub async fn run(args: &[String]) -> i32 {
@@ -14,6 +19,7 @@ pub async fn run(args: &[String]) -> i32 {
         Some("memo") => memo(&args[1..]).await,
         Some("pearls") => pearls(&args[1..]).await,
         Some("forget") => forget(&args[1..]).await,
+        Some("echo") => echo(&args[1..]).await,
         Some("-h") | Some("--help") | Some("help") | None => {
             print_help();
             0
@@ -34,6 +40,7 @@ fn print_help() {
     println!("  lore memo <content> [--config <path>]");
     println!("  lore pearls [--config <path>]");
     println!("  lore forget <pearl_id> [--config <path>]");
+    println!("  lore echo <query> [--config <path>]");
     println!("  lore help");
 }
 
@@ -133,8 +140,14 @@ async fn memo(args: &[String]) -> i32 {
         }
     };
 
-    let store = PgLoreStore::new(pool);
-    if let Err(e) = store.migrate().await {
+    let qdrant_store = match build_indexed_store(&cfg, pool).await {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("{e}");
+            return 1;
+        }
+    };
+    if let Err(e) = qdrant_store.migrate().await {
         eprintln!("migration failed: {e}");
         return 1;
     }
@@ -153,7 +166,7 @@ async fn memo(args: &[String]) -> i32 {
         }
     };
 
-    let saved = match store
+    let saved = match qdrant_store
         .save_pearl(cfg.agent.tenant_id, cfg.agent.agent_id, pearl)
         .await
     {
@@ -204,7 +217,13 @@ async fn pearls(args: &[String]) -> i32 {
         }
     };
 
-    let store = PgLoreStore::new(pool);
+    let store = match build_indexed_store(&cfg, pool).await {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("{e}");
+            return 1;
+        }
+    };
     if let Err(e) = store.migrate().await {
         eprintln!("migration failed: {e}");
         return 1;
@@ -278,7 +297,13 @@ async fn forget(args: &[String]) -> i32 {
         }
     };
 
-    let store = PgLoreStore::new(pool);
+    let store = match build_indexed_store(&cfg, pool).await {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("{e}");
+            return 1;
+        }
+    };
     if let Err(e) = store.migrate().await {
         eprintln!("migration failed: {e}");
         return 1;
@@ -291,6 +316,184 @@ async fn forget(args: &[String]) -> i32 {
     }
     println!("forgot pearl: {pearl_uuid}");
     0
+}
+
+async fn echo(args: &[String]) -> i32 {
+    let _ = dotenvy::dotenv();
+
+    let (config_path, rest) = match parse_config_path_with_rest(args) {
+        Ok(v) => v,
+        Err(msg) => {
+            eprintln!("{msg}");
+            return 2;
+        }
+    };
+    let query = rest.join(" ").trim().to_string();
+    if query.is_empty() {
+        eprintln!("echo requires <query>");
+        return 2;
+    }
+
+    let cfg = match LoreleiConfig::load_from_toml_path(&config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("config invalid: {e}");
+            return 1;
+        }
+    };
+
+    let pg_url = match std::env::var(&cfg.lore.postgres_url_env) {
+        Ok(v) => v,
+        Err(_) => {
+            eprintln!(
+                "missing required env var (value not shown): {}",
+                cfg.lore.postgres_url_env
+            );
+            return 1;
+        }
+    };
+    let qdrant_url = match std::env::var(&cfg.lore.qdrant_url_env) {
+        Ok(v) => v,
+        Err(_) => {
+            eprintln!(
+                "missing required env var (value not shown): {}",
+                cfg.lore.qdrant_url_env
+            );
+            return 1;
+        }
+    };
+
+    let pool = match PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&pg_url)
+        .await
+    {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("database connection failed: {e}");
+            return 1;
+        }
+    };
+
+    let Some(embedding_provider_cfg) = cfg.providers.get(&cfg.agent.default_embedding_provider)
+    else {
+        eprintln!("config invalid: embedding provider is not configured");
+        return 1;
+    };
+    if embedding_provider_cfg.kind != lorelei_core::config::ProviderKind::Mock {
+        eprintln!("echo not implemented for non-mock embedding providers yet");
+        return 1;
+    }
+
+    // For now, only a deterministic mock embedder is wired. This validates the
+    // Qdrant integration without any vendor SDKs.
+    let embedder = Arc::new(DeterministicMockEmbeddingProvider::new(64));
+    let client = match Qdrant::from_url(&qdrant_url).build() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("qdrant client init failed: {e}");
+            return 1;
+        }
+    };
+    let index = QdrantPearlIndex::new(client, cfg.lore.collection.clone());
+    let store = PgLoreStore::new(pool);
+    if let Err(e) = store.migrate().await {
+        eprintln!("migration failed: {e}");
+        return 1;
+    }
+
+    let emb = match embedder
+        .embed(
+            cfg.agent.tenant_id,
+            &cfg.agent.default_embedding_provider,
+            vec![query.clone()],
+        )
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("embed failed: {e}");
+            return 1;
+        }
+    };
+    let Some(vector) = emb.vectors.into_iter().next() else {
+        eprintln!("embed failed: empty vectors");
+        return 1;
+    };
+    if let Err(e) = index.ensure_collection(vector.len() as u64).await {
+        eprintln!("qdrant collection error: {e}");
+        return 1;
+    }
+
+    let hits = match index
+        .search_pearl_vectors(
+            cfg.agent.tenant_id,
+            vector,
+            cfg.echo.top_k as u64,
+            Some(cfg.agent.agent_id),
+        )
+        .await
+    {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("search failed: {e}");
+            return 1;
+        }
+    };
+
+    let (resolved, ignored) = match resolve_hits(&store, cfg.agent.tenant_id, hits).await {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("failed to resolve hits: {e}");
+            return 1;
+        }
+    };
+
+    for id in ignored {
+        eprintln!("ignored qdrant-only hit for pearl_id {}", id.0);
+    }
+
+    for r in resolved {
+        println!(
+            "{:.4}\t{}\t{}",
+            r.score, r.pearl.pearl_id.0, r.pearl.content
+        );
+    }
+
+    0
+}
+
+async fn build_indexed_store(
+    cfg: &LoreleiConfig,
+    pool: sqlx::PgPool,
+) -> Result<PgLoreStore, String> {
+    let qdrant_url = std::env::var(&cfg.lore.qdrant_url_env).map_err(|_| {
+        format!(
+            "missing required env var (value not shown): {}",
+            cfg.lore.qdrant_url_env
+        )
+    })?;
+
+    let embedding_provider_cfg = cfg
+        .providers
+        .get(&cfg.agent.default_embedding_provider)
+        .ok_or_else(|| "config invalid: embedding provider is not configured".to_string())?;
+    if embedding_provider_cfg.kind != lorelei_core::config::ProviderKind::Mock {
+        return Err("indexing not implemented for non-mock embedding providers yet".to_string());
+    }
+
+    let embedder = Arc::new(DeterministicMockEmbeddingProvider::new(64));
+    let client = Qdrant::from_url(&qdrant_url)
+        .build()
+        .map_err(|e| format!("qdrant client init failed: {e}"))?;
+    let index = QdrantPearlIndex::new(client, cfg.lore.collection.clone());
+
+    Ok(PgLoreStore::new_indexed(
+        pool,
+        index,
+        embedder,
+        cfg.agent.default_embedding_provider.clone(),
+    ))
 }
 
 fn parse_config_path(args: &[String]) -> Result<PathBuf, String> {

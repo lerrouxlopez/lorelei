@@ -8,6 +8,7 @@ license.workspace = true
 dotenvy = "0.15"
 lorelei-core = { path = "../lorelei-core" }
 lorelei-lore = { path = "../lorelei-lore" }
+qdrant-client = "1.10"
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 uuid = { version = "1", features = ["v4"] }

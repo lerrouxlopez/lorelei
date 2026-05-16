@@ -9,15 +9,41 @@ use lorelei_core::types::{
 use serde_json::Value;
 use sqlx::{PgPool, Row};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use uuid::Uuid;
+
+use crate::embedding::EmbeddingProvider;
+use crate::qdrant::QdrantPearlIndex;
 
 pub struct PgLoreStore {
     pool: PgPool,
+    index: Option<QdrantPearlIndex>,
+    embedder: Option<Arc<dyn EmbeddingProvider>>,
+    embedding_provider: Option<String>,
 }
 
 impl PgLoreStore {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            index: None,
+            embedder: None,
+            embedding_provider: None,
+        }
+    }
+
+    pub fn new_indexed(
+        pool: PgPool,
+        index: QdrantPearlIndex,
+        embedder: Arc<dyn EmbeddingProvider>,
+        embedding_provider: impl Into<String>,
+    ) -> Self {
+        Self {
+            pool,
+            index: Some(index),
+            embedder: Some(embedder),
+            embedding_provider: Some(embedding_provider.into()),
+        }
     }
 
     pub async fn migrate(&self) -> Result<(), LoreleiError> {
@@ -27,6 +53,15 @@ impl PgLoreStore {
             .await
             .map_err(|e| LoreleiError::Internal(format!("migration failed: {e}")))?;
         Ok(())
+    }
+
+    pub async fn get_pearl_by_id(
+        &self,
+        tenant_id: TenantId,
+        pearl_id: PearlId,
+        include_deleted: bool,
+    ) -> Result<Option<Pearl>, LoreleiError> {
+        <Self as LoreStore>::get_pearl(self, tenant_id, pearl_id, include_deleted).await
     }
 }
 
@@ -78,7 +113,7 @@ values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,null,null)
         .await
         .map_err(map_sqlx)?;
 
-        Ok(Pearl {
+        let saved = Pearl {
             pearl_id,
             tenant_id,
             agent_id,
@@ -88,7 +123,24 @@ values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,null,null)
             confidence: pearl.confidence,
             created_at: now,
             metadata: pearl.metadata,
-        })
+        };
+
+        if let (Some(index), Some(embedder), Some(provider_name)) = (
+            self.index.as_ref(),
+            self.embedder.as_ref(),
+            self.embedding_provider.as_ref(),
+        ) {
+            let resp = embedder
+                .embed(tenant_id, provider_name, vec![saved.content.clone()])
+                .await?;
+            let vector = resp.vectors.into_iter().next().ok_or_else(|| {
+                LoreleiError::Internal("embedding provider returned no vectors".to_string())
+            })?;
+            index.ensure_collection(vector.len() as u64).await?;
+            index.upsert_pearl_vector(&saved, vector).await?;
+        }
+
+        Ok(saved)
     }
 
     async fn get_pearl(
@@ -226,6 +278,11 @@ where tenant_id = $2 and id = $3 and deleted_at is null
 
         if rows == 0 {
             return Err(LoreleiError::NotFound("pearl not found".to_string()));
+        }
+
+        if let Some(index) = self.index.as_ref() {
+            // Best-effort: keep Postgres as source of truth even if Qdrant fails.
+            let _ = index.delete_pearl_vector(tenant_id, pearl_id).await;
         }
         Ok(())
     }

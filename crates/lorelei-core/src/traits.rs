@@ -2,9 +2,9 @@
 
 use crate::error::LoreleiError;
 use crate::types::{
-    AgentId, CurrentEvent, EchoHit, EchoQuery, NormalizedToolCall, Pearl, PearlId, PearlListQuery,
-    ProviderCapabilities, Run, RunId, ShellCall, ShellResult, SirenDecision, SongChunk,
-    SongRequest, SongResponse, TenantId,
+    AgentId, CurrentEvent, EchoHit, EchoQuery, EmbeddingRequest, EmbeddingResponse,
+    NormalizedToolCall, Pearl, PearlId, PearlListQuery, ProviderCapabilities, Run, RunId,
+    ShellCall, ShellResult, SirenDecision, SongChunk, SongRequest, SongResponse, TenantId,
 };
 use async_trait::async_trait;
 use futures::stream::BoxStream;
@@ -19,6 +19,8 @@ pub trait SongProvider: Send + Sync {
         &self,
         request: SongRequest,
     ) -> Result<BoxStream<'static, SongChunk>, LoreleiError>;
+
+    async fn embed(&self, request: EmbeddingRequest) -> Result<EmbeddingResponse, LoreleiError>;
 }
 
 #[async_trait]

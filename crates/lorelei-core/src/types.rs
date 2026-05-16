@@ -237,6 +237,19 @@ pub struct SongChunk {
     pub done: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EmbeddingRequest {
+    pub tenant_id: TenantId,
+    pub provider: String,
+    pub inputs: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EmbeddingResponse {
+    pub vectors: Vec<Vec<f32>>,
+    pub model: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ProviderCapabilities {
     pub streaming: bool,
