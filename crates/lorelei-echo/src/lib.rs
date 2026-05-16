@@ -4,3 +4,4 @@
 
 pub mod event;
 pub mod provenance;
+pub mod retriever;

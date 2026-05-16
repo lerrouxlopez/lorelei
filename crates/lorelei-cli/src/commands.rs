@@ -1,9 +1,10 @@
 #![forbid(unsafe_code)]
 
 use lorelei_core::config::LoreleiConfig;
+use lorelei_core::traits::EchoRetriever;
 use lorelei_core::traits::LoreStore;
-use lorelei_core::types::{NewPearl, PearlListQuery, PearlType, UnitInterval};
-use lorelei_lore::echo::resolve_hits;
+use lorelei_core::types::{EchoQuery, NewPearl, PearlListQuery, PearlType, UnitInterval};
+use lorelei_echo::retriever::{EchoEngine, EchoRetrievalConfig};
 use lorelei_lore::embedding::{DeterministicMockEmbeddingProvider, EmbeddingProvider};
 use lorelei_lore::pg::PgLoreStore;
 use lorelei_lore::qdrant::QdrantPearlIndex;
@@ -387,7 +388,8 @@ async fn echo(args: &[String]) -> i32 {
 
     // For now, only a deterministic mock embedder is wired. This validates the
     // Qdrant integration without any vendor SDKs.
-    let embedder = Arc::new(DeterministicMockEmbeddingProvider::new(64));
+    let embedder: Arc<dyn EmbeddingProvider> =
+        Arc::new(DeterministicMockEmbeddingProvider::new(64));
     let client = match Qdrant::from_url(&qdrant_url).build() {
         Ok(c) => c,
         Err(e) => {
@@ -402,61 +404,46 @@ async fn echo(args: &[String]) -> i32 {
         return 1;
     }
 
-    let emb = match embedder
-        .embed(
-            cfg.agent.tenant_id,
-            &cfg.agent.default_embedding_provider,
-            vec![query.clone()],
-        )
-        .await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("embed failed: {e}");
-            return 1;
-        }
-    };
-    let Some(vector) = emb.vectors.into_iter().next() else {
-        eprintln!("embed failed: empty vectors");
-        return 1;
-    };
-    if let Err(e) = index.ensure_collection(vector.len() as u64).await {
-        eprintln!("qdrant collection error: {e}");
-        return 1;
-    }
+    let engine = EchoEngine::new(
+        store,
+        index,
+        embedder,
+        cfg.agent.default_embedding_provider.clone(),
+        EchoRetrievalConfig {
+            rerank_top_k: cfg.echo.rerank_top_k,
+            enable_query_rewrite: false,
+        },
+    );
 
-    let hits = match index
-        .search_pearl_vectors(
+    let hits = match engine
+        .query(
             cfg.agent.tenant_id,
-            vector,
-            cfg.echo.top_k as u64,
-            Some(cfg.agent.agent_id),
+            cfg.agent.agent_id,
+            EchoQuery {
+                query,
+                top_k: cfg.echo.top_k,
+                min_confidence: cfg.echo.min_confidence,
+                pearl_type: None,
+            },
         )
         .await
     {
         Ok(h) => h,
         Err(e) => {
-            eprintln!("search failed: {e}");
+            eprintln!("echo failed: {e}");
             return 1;
         }
     };
 
-    let (resolved, ignored) = match resolve_hits(&store, cfg.agent.tenant_id, hits).await {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("failed to resolve hits: {e}");
-            return 1;
-        }
-    };
-
-    for id in ignored {
-        eprintln!("ignored qdrant-only hit for pearl_id {}", id.0);
-    }
-
-    for r in resolved {
+    for h in hits {
         println!(
-            "{:.4}\t{}\t{}",
-            r.score, r.pearl.pearl_id.0, r.pearl.content
+            "{:.4}\t{}\t{:?}\t{}\t{}\t{}",
+            h.score.get(),
+            h.pearl_id.0,
+            h.pearl_type,
+            h.created_at.to_rfc3339(),
+            h.reason,
+            h.content
         );
     }
 

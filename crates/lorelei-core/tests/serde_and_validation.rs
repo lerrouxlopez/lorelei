@@ -39,14 +39,13 @@ fn serde_round_trip_pearl() {
 
 #[test]
 fn serde_round_trip_echo_hit() {
-    let (tenant_id, agent_id, _) = ids();
     let hit = EchoHit {
-        echo_id: EchoId(Uuid::from_u128(11)),
-        tenant_id,
-        agent_id,
+        pearl_id: PearlId(Uuid::from_u128(11)),
         score: UnitInterval::new(0.7).unwrap(),
-        excerpt: "an echo".to_string(),
-        metadata: BTreeMap::new(),
+        content: "an echo".to_string(),
+        pearl_type: PearlType::Other,
+        reason: "v=0.7".to_string(),
+        created_at: fixed_time(),
     };
 
     let encoded = serde_json::to_string(&hit).unwrap();

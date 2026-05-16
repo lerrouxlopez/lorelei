@@ -199,19 +199,20 @@ impl TryFrom<PearlSerde> for Pearl {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EchoQuery {
-    pub text: String,
-    pub limit: usize,
+    pub query: String,
+    pub top_k: usize,
     pub min_confidence: Option<UnitInterval>,
+    pub pearl_type: Option<PearlType>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EchoHit {
-    pub echo_id: EchoId,
-    pub tenant_id: TenantId,
-    pub agent_id: AgentId,
     pub score: UnitInterval,
-    pub excerpt: String,
-    pub metadata: BTreeMap<String, Value>,
+    pub pearl_id: PearlId,
+    pub content: String,
+    pub pearl_type: PearlType,
+    pub reason: String,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

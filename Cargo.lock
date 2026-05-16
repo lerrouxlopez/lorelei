@@ -1159,6 +1159,7 @@ version = "0.1.0"
 dependencies = [
  "dotenvy",
  "lorelei-core",
+ "lorelei-echo",
  "lorelei-lore",
  "qdrant-client",
  "sqlx",
@@ -1184,6 +1185,17 @@ dependencies = [
 [[package]]
 name = "lorelei-echo"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "log",
+ "lorelei-core",
+ "lorelei-lore",
+ "qdrant-client",
+ "sqlx",
+ "tokio",
+ "uuid",
+]
 
 [[package]]
 name = "lorelei-eval"
