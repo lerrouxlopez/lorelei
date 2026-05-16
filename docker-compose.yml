@@ -62,9 +62,9 @@ services:
       QDRANT_URL: ${QDRANT_URL:-http://qdrant:6334}
       RUST_LOG: ${RUST_LOG:-info}
     ports:
-      - "7331:7331"
+      - "8080:8080"
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:7331/healthz"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
       interval: 5s
       timeout: 5s
       retries: 12

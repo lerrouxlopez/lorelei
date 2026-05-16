@@ -1,0 +1,21 @@
+# Builds a lightweight image that contains the `lore` CLI.
+
+FROM rust:1.88-bookworm AS build
+WORKDIR /app
+
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+
+RUN cargo build --release -p lorelei-cli
+
+FROM debian:bookworm-slim AS runtime
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /app/target/release/lore /usr/local/bin/lore
+
+# Optional alias, created inside the image (not referenced by the Rust workspace).
+RUN ln -sf /usr/local/bin/lore /usr/local/bin/lori
+
+ENTRYPOINT ["lore"]
+

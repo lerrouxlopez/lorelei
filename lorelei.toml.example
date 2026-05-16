@@ -11,8 +11,8 @@ default_provider = "mock"
 default_embedding_provider = "mock"
 
 [harbor]
-host = "127.0.0.1"
-port = 7331
+host = "0.0.0.0"
+port = 8080
 
 [lore]
 postgres_url_env = "DATABASE_URL"

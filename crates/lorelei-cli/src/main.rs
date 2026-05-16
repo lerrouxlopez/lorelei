@@ -1,8 +1,12 @@
-mod commands;
+mod app;
+mod cli;
+mod harbor_client;
+
+use clap::Parser;
 
 #[tokio::main]
 async fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let code = commands::run(&args).await;
+    let cli = cli::Cli::parse();
+    let code = app::run(cli).await;
     std::process::exit(code);
 }

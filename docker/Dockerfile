@@ -16,5 +16,5 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 COPY --from=build /app/target/release/lorelei-harbor /usr/local/bin/lorelei-harbor
 COPY lorelei.toml.example /app/lorelei.toml
 
-EXPOSE 7331
+EXPOSE 8080
 CMD ["lorelei-harbor"]
