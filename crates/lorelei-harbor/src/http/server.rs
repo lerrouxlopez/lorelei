@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+use crate::runtime::pg::PgCurrentStore;
 use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
@@ -8,15 +9,19 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use lorelei_core::config::LoreleiConfig;
 use lorelei_core::error::LoreleiError;
-use lorelei_core::traits::{EchoRetriever, LoreStore};
-use lorelei_core::types::{EchoQuery, NewPearl, PearlListQuery, PearlType, UnitInterval};
+use lorelei_core::traits::{CurrentStore, EchoRetriever, LoreStore};
+use lorelei_core::types::{
+    EchoQuery, NewPearl, PearlListQuery, PearlType, RunStatus, UnitInterval,
+};
 use lorelei_echo::retriever::{EchoEngine, EchoRetrievalConfig};
 use lorelei_lore::embedding::{DynSongProviderEmbeddingAdapter, EmbeddingProvider};
 use lorelei_lore::pg::PgLoreStore;
 use lorelei_lore::qdrant::QdrantPearlIndex;
 use lorelei_shells::registry::BuiltinShellRegistry;
-use lorelei_shells::repo::NullShellCallRepository;
+use lorelei_shells::repo::PgShellCallRepository;
+use lorelei_siren::policy::DeterministicSirenPolicy;
 use lorelei_song::registry::ProviderRegistry;
+use lorelei_tide::runtime::SingleAgentTideRuntime;
 use qdrant_client::Qdrant;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -34,6 +39,9 @@ pub struct AppState {
     pub echo: Arc<dyn EchoRetriever>,
     pub providers: Arc<ProviderRegistry>,
     pub shells: Arc<BuiltinShellRegistry>,
+    pub currents: Arc<PgCurrentStore>,
+    pub siren: Arc<DeterministicSirenPolicy>,
+    pub tide: Arc<SingleAgentTideRuntime>,
 }
 
 #[derive(Debug, Serialize)]
@@ -100,12 +108,14 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
+        .route("/v1/runs", post(create_run))
+        .route("/v1/runs/:run_id", get(get_run))
         .route("/v1/pearls", post(create_pearl).get(list_pearls))
         .route("/v1/pearls/:pearl_id", get(get_pearl).delete(delete_pearl))
         .route("/v1/echo", post(echo))
         .route("/v1/providers", get(list_providers))
         .route("/v1/shells", get(list_shells))
-        .route("/v1/runs/:run_id/currents", get(currents_placeholder))
+        .route("/v1/runs/:run_id/currents", get(list_currents))
         .layer(middleware::from_fn(request_id_middleware))
         .with_state(state)
 }
@@ -143,6 +153,8 @@ pub async fn build_state() -> Result<AppState, LoreleiError> {
         .build()
         .map_err(|e| LoreleiError::Internal(format!("qdrant client init failed: {e}")))?;
     let qdrant_index = QdrantPearlIndex::new(qdrant.clone(), config.lore.collection.clone());
+    let currents = Arc::new(PgCurrentStore::new(pg_pool.clone()));
+    currents.migrate().await?;
 
     let providers = Arc::new(ProviderRegistry::from_config(&config)?);
     let embed_provider = providers.get(&config.agent.default_embedding_provider)?;
@@ -171,11 +183,30 @@ pub async fn build_state() -> Result<AppState, LoreleiError> {
     let lore_store: Arc<dyn LoreStore> = Arc::new(lore_store_indexed);
     let echo: Arc<dyn EchoRetriever> = Arc::new(echo_engine);
 
-    let shells: Arc<BuiltinShellRegistry> = Arc::new(BuiltinShellRegistry::new(
+    let shells_repo = Arc::new(PgShellCallRepository::new(pg_pool.clone()));
+    let shells: Arc<BuiltinShellRegistry> = Arc::new(
+        BuiltinShellRegistry::new(
+            config.clone(),
+            lore_store.clone(),
+            echo.clone(),
+            shells_repo,
+        )
+        .with_current_id_provider(|call| Some(call.call_id)),
+    );
+
+    let siren = Arc::new(DeterministicSirenPolicy::new(config.clone()));
+    let song = providers.get(&config.agent.default_provider)?;
+    let runs: Arc<dyn lorelei_tide::runtime::RunRepository> = currents.clone();
+    let currents_trait: Arc<dyn lorelei_core::traits::CurrentStore> = currents.clone();
+
+    let tide: Arc<SingleAgentTideRuntime> = Arc::new(SingleAgentTideRuntime::new(
         config.clone(),
-        lore_store.clone(),
+        runs,
+        currents_trait,
         echo.clone(),
-        Arc::new(NullShellCallRepository),
+        song,
+        shells.clone(),
+        siren.clone(),
     ));
 
     Ok(AppState {
@@ -187,6 +218,9 @@ pub async fn build_state() -> Result<AppState, LoreleiError> {
         echo,
         providers,
         shells,
+        currents,
+        siren,
+        tide,
     })
 }
 
@@ -490,11 +524,137 @@ async fn list_shells(State(state): State<AppState>) -> impl IntoResponse {
     Json(state.shells.specs())
 }
 
-async fn currents_placeholder(Path(_run_id): Path<Uuid>) -> impl IntoResponse {
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        "currents endpoint not implemented yet",
-    )
+#[derive(Debug, Deserialize)]
+pub struct CreateRunRequest {
+    pub tenant_id: Uuid,
+    pub agent_id: Uuid,
+    pub input: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RunResponse {
+    pub run_id: Uuid,
+    pub tenant_id: Uuid,
+    pub agent_id: Uuid,
+    pub status: RunStatus,
+    pub output: Option<String>,
+}
+
+async fn create_run(
+    State(state): State<AppState>,
+    axum::extract::Extension(rid): axum::extract::Extension<RequestId>,
+    headers: HeaderMap,
+    Json(body): Json<CreateRunRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let request_id = request_id_from_headers_or_ext(&headers, Some(&rid));
+    let res = state
+        .tide
+        .run_once(
+            lorelei_core::types::TenantId(body.tenant_id),
+            lorelei_core::types::AgentId(body.agent_id),
+            body.input,
+        )
+        .await
+        .map_err(|e| map_err(e, request_id))?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(RunResponse {
+            run_id: res.run_id.0,
+            tenant_id: body.tenant_id,
+            agent_id: body.agent_id,
+            status: res.status,
+            output: Some(res.output),
+        }),
+    ))
+}
+
+async fn get_run(
+    State(state): State<AppState>,
+    axum::extract::Extension(rid): axum::extract::Extension<RequestId>,
+    headers: HeaderMap,
+    Path(run_id): Path<Uuid>,
+    Query(q): Query<std::collections::HashMap<String, String>>,
+) -> Result<impl IntoResponse, ApiError> {
+    let request_id = request_id_from_headers_or_ext(&headers, Some(&rid));
+    let tenant_id = q
+        .get("tenant_id")
+        .and_then(|s| Uuid::parse_str(s).ok())
+        .ok_or_else(|| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            code: "bad_request",
+            message: "tenant_id query param required".to_string(),
+            request_id,
+        })?;
+    let agent_id = q
+        .get("agent_id")
+        .and_then(|s| Uuid::parse_str(s).ok())
+        .ok_or_else(|| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            code: "bad_request",
+            message: "agent_id query param required".to_string(),
+            request_id,
+        })?;
+
+    let got = state
+        .currents
+        .get_run(
+            lorelei_core::types::TenantId(tenant_id),
+            lorelei_core::types::AgentId(agent_id),
+            lorelei_core::types::RunId(run_id),
+        )
+        .await
+        .map_err(|e| map_err(e, request_id))?;
+
+    let Some(run) = got else {
+        return Err(ApiError {
+            status: StatusCode::NOT_FOUND,
+            code: "not_found",
+            message: "run not found".to_string(),
+            request_id,
+        });
+    };
+
+    Ok(Json(RunResponse {
+        run_id: run.run_id.0,
+        tenant_id: run.tenant_id.0,
+        agent_id: run.agent_id.0,
+        status: run.status,
+        output: None,
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CurrentsQuery {
+    pub tenant_id: Uuid,
+    pub agent_id: Uuid,
+    #[serde(default = "default_currents_limit")]
+    pub limit: usize,
+}
+
+fn default_currents_limit() -> usize {
+    500
+}
+
+async fn list_currents(
+    State(state): State<AppState>,
+    axum::extract::Extension(rid): axum::extract::Extension<RequestId>,
+    headers: HeaderMap,
+    Path(run_id): Path<Uuid>,
+    Query(q): Query<CurrentsQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let request_id = request_id_from_headers_or_ext(&headers, Some(&rid));
+    let currents = state
+        .currents
+        .list_current_events(
+            lorelei_core::types::TenantId(q.tenant_id),
+            lorelei_core::types::AgentId(q.agent_id),
+            lorelei_core::types::RunId(run_id),
+            q.limit,
+        )
+        .await
+        .map_err(|e| map_err(e, request_id))?;
+    Ok(Json(currents))
 }
 
 fn map_err(err: LoreleiError, request_id: Uuid) -> ApiError {

@@ -27,6 +27,19 @@ impl MockSongProvider {
     }
 
     fn deterministic_text_response(input: &str) -> String {
+        if input.contains("LORELEI_MODE=planner_json") {
+            return r#"{"action":"answer","reasoning_summary":"mock plan","answer":"hello from planner"}"#.to_string();
+        }
+        if input.contains("LORELEI_MODE=planner_json_invalid_once") {
+            // Used by tests: first call returns invalid JSON; retry prompt should not contain this marker.
+            return "not-json".to_string();
+        }
+        if input.contains("LORELEI_MODE=planner_repair") {
+            return r#"{"action":"answer","reasoning_summary":"repaired","answer":"hello from repaired planner"}"#.to_string();
+        }
+        if input.contains("LORELEI_MODE=answer") {
+            return "Say hello from The Song.".to_string();
+        }
         format!("mock: {input}")
     }
 

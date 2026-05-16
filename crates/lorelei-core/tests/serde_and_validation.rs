@@ -99,6 +99,14 @@ fn serde_round_trip_siren_decision() {
     let encoded = serde_json::to_string(&decision).unwrap();
     let decoded: SirenDecision = serde_json::from_str(&encoded).unwrap();
     assert_eq!(decision, decoded);
+
+    let decision2 = SirenDecision::RequireApproval {
+        reasoning_summary: "need approval".to_string(),
+        approval_prompt: "approve?".to_string(),
+    };
+    let encoded2 = serde_json::to_string(&decision2).unwrap();
+    let decoded2: SirenDecision = serde_json::from_str(&encoded2).unwrap();
+    assert_eq!(decision2, decoded2);
 }
 
 #[test]

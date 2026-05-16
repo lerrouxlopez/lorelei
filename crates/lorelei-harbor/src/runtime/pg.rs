@@ -97,6 +97,82 @@ where id = $3 and tenant_id = $4 and agent_id = $5
         }
         Ok(())
     }
+
+    pub async fn get_run(
+        &self,
+        tenant_id: TenantId,
+        agent_id: AgentId,
+        run_id: RunId,
+    ) -> Result<Option<Run>, LoreleiError> {
+        let row = sqlx::query(
+            r#"
+select id, tenant_id, agent_id, status, created_at, coalesce(completed_at, created_at) as updated_at
+from runs
+where id = $1 and tenant_id = $2 and agent_id = $3
+"#,
+        )
+        .bind(run_id.0)
+        .bind(tenant_id.0.to_string())
+        .bind(agent_id.0.to_string())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_sqlx)?;
+
+        let Some(row) = row else {
+            return Ok(None);
+        };
+
+        let id: Uuid = row.get("id");
+        let tenant_id_s: String = row.get("tenant_id");
+        let agent_id_s: String = row.get("agent_id");
+        let status_s: String = row.get("status");
+        let created_at: DateTime<Utc> = row.get("created_at");
+        let updated_at: DateTime<Utc> = row.get("updated_at");
+
+        Ok(Some(Run {
+            run_id: RunId(id),
+            tenant_id: TenantId(Uuid::parse_str(&tenant_id_s).map_err(|_| {
+                LoreleiError::Internal("invalid tenant_id in runs table".to_string())
+            })?),
+            agent_id: AgentId(Uuid::parse_str(&agent_id_s).map_err(|_| {
+                LoreleiError::Internal("invalid agent_id in runs table".to_string())
+            })?),
+            status: parse_status(&status_s)?,
+            created_at,
+            updated_at,
+        }))
+    }
+}
+
+#[async_trait::async_trait]
+impl lorelei_tide::runtime::RunRepository for PgCurrentStore {
+    async fn create_run(
+        &self,
+        tenant_id: TenantId,
+        agent_id: AgentId,
+        goal: &str,
+    ) -> Result<Run, LoreleiError> {
+        PgCurrentStore::create_run(self, tenant_id, agent_id, goal).await
+    }
+
+    async fn complete_run(
+        &self,
+        tenant_id: TenantId,
+        agent_id: AgentId,
+        run_id: RunId,
+        status: RunStatus,
+    ) -> Result<(), LoreleiError> {
+        PgCurrentStore::complete_run(self, tenant_id, agent_id, run_id, status).await
+    }
+
+    async fn get_run(
+        &self,
+        tenant_id: TenantId,
+        agent_id: AgentId,
+        run_id: RunId,
+    ) -> Result<Option<Run>, LoreleiError> {
+        PgCurrentStore::get_run(self, tenant_id, agent_id, run_id).await
+    }
 }
 
 #[async_trait::async_trait]
@@ -259,6 +335,20 @@ fn status_to_str(s: RunStatus) -> &'static str {
         RunStatus::Succeeded => "succeeded",
         RunStatus::Failed => "failed",
         RunStatus::Canceled => "canceled",
+    }
+}
+
+fn parse_status(s: &str) -> Result<RunStatus, LoreleiError> {
+    match s {
+        "pending" => Ok(RunStatus::Pending),
+        "running" => Ok(RunStatus::Running),
+        "succeeded" => Ok(RunStatus::Succeeded),
+        "failed" => Ok(RunStatus::Failed),
+        "canceled" => Ok(RunStatus::Canceled),
+        other => Err(LoreleiError::validation(
+            "run.status",
+            format!("unknown status `{other}`"),
+        )),
     }
 }
 

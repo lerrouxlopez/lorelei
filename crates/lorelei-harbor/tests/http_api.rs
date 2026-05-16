@@ -11,9 +11,13 @@ use lorelei_core::types::{
 };
 use lorelei_echo::retriever::{EchoEngine, EchoRetrievalConfig};
 use lorelei_harbor::http::server::{router, AppState};
+use lorelei_harbor::runtime::pg::PgCurrentStore;
 use lorelei_lore::pg::PgLoreStore;
 use lorelei_shells::registry::BuiltinShellRegistry;
 use lorelei_shells::repo::NullShellCallRepository;
+use lorelei_siren::policy::DeterministicSirenPolicy;
+use lorelei_song::providers::mock::MockSongProvider;
+use lorelei_tide::runtime::SingleAgentTideRuntime;
 use qdrant_client::Qdrant;
 use sqlx::postgres::PgPoolOptions;
 use std::collections::BTreeMap;
@@ -163,6 +167,11 @@ fn minimal_state() -> AppState {
         .unwrap();
     let qdrant = Qdrant::from_url("http://127.0.0.1:1").build().unwrap();
 
+    let currents = Arc::new(PgCurrentStore::new(pg_pool.clone()));
+    let siren = Arc::new(DeterministicSirenPolicy::new(cfg.clone()));
+    let song: Arc<dyn lorelei_core::traits::SongProvider> =
+        Arc::new(MockSongProvider::deterministic());
+
     let lore_store: Arc<dyn LoreStore> = Arc::new(MemLoreStore::default());
     let echo: Arc<dyn EchoRetriever> = Arc::new(EmptyEcho);
     let shells = Arc::new(BuiltinShellRegistry::new(
@@ -170,6 +179,16 @@ fn minimal_state() -> AppState {
         lore_store.clone(),
         echo.clone(),
         Arc::new(NullShellCallRepository),
+    ));
+
+    let tide: Arc<SingleAgentTideRuntime> = Arc::new(SingleAgentTideRuntime::new(
+        cfg.clone(),
+        currents.clone(),
+        currents.clone(),
+        echo.clone(),
+        song,
+        shells.clone(),
+        siren.clone(),
     ));
 
     AppState {
@@ -183,6 +202,9 @@ fn minimal_state() -> AppState {
             BTreeMap::new(),
         )),
         shells,
+        currents,
+        siren,
+        tide,
     }
 }
 
@@ -270,12 +292,26 @@ async fn env_state() -> Option<AppState> {
 
     let providers_reg = Arc::new(lorelei_song::registry::ProviderRegistry::from_config(&cfg).ok()?);
 
+    let currents = Arc::new(PgCurrentStore::new(pg_pool.clone()));
+    let siren = Arc::new(DeterministicSirenPolicy::new(cfg.clone()));
+    let song: Arc<dyn lorelei_core::traits::SongProvider> =
+        providers_reg.get(&cfg.agent.default_provider).ok()?;
+
     let lore_store_arc: Arc<dyn LoreStore> = Arc::new(lore_store);
     let shells = Arc::new(BuiltinShellRegistry::new(
         cfg.clone(),
         lore_store_arc.clone(),
         echo_engine.clone(),
         Arc::new(NullShellCallRepository),
+    ));
+    let tide: Arc<SingleAgentTideRuntime> = Arc::new(SingleAgentTideRuntime::new(
+        cfg.clone(),
+        currents.clone(),
+        currents.clone(),
+        echo_engine.clone(),
+        song,
+        shells.clone(),
+        siren.clone(),
     ));
 
     Some(AppState {
@@ -287,6 +323,9 @@ async fn env_state() -> Option<AppState> {
         echo: echo_engine,
         providers: providers_reg,
         shells,
+        currents,
+        siren,
+        tide,
     })
 }
 
@@ -318,6 +357,72 @@ async fn readyz_fails_when_dependencies_unavailable() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn create_run_and_list_currents() {
+    let Some(state) = env_state().await else {
+        eprintln!("skipping (set DATABASE_URL and QDRANT_URL to run integration test)");
+        return;
+    };
+
+    let tenant_id = state.config.agent.tenant_id.0;
+    let agent_id = state.config.agent.agent_id.0;
+
+    let app = router(state.clone());
+    let body = serde_json::json!({
+        "tenant_id": tenant_id,
+        "agent_id": agent_id,
+        "input": "Say hello from The Song."
+    });
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/runs")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let created: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let run_id = created.get("run_id").unwrap().as_str().unwrap();
+
+    let res2 = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/runs/{run_id}?tenant_id={tenant_id}&agent_id={agent_id}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res2.status(), StatusCode::OK);
+
+    let res3 = router(state)
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/runs/{run_id}/currents?tenant_id={tenant_id}&agent_id={agent_id}&limit=500"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res3.status(), StatusCode::OK);
+    let bytes3 = axum::body::to_bytes(res3.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let currents: serde_json::Value = serde_json::from_slice(&bytes3).unwrap();
+    assert!(currents.as_array().unwrap().len() >= 2);
 }
 
 #[tokio::test]
