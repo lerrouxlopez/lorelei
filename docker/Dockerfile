@@ -1,6 +1,6 @@
 # Builds and runs the Lorelei Harbor HTTP API.
 
-FROM rust:1.86-bookworm AS build
+FROM rust:1.88-bookworm AS build
 WORKDIR /app
 
 # Cache deps first
