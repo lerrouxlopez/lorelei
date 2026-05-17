@@ -4,7 +4,7 @@ use lorelei_core::config::{
     SirenConfig,
 };
 use lorelei_core::error::LoreleiError;
-use lorelei_core::traits::{EchoRetriever, LoreStore, ShellRegistry};
+use lorelei_core::traits::{DocumentStore, EchoRetriever, LoreStore, ShellRegistry};
 use lorelei_core::types::{
     AgentId, EchoHit, EchoQuery, NewPearl, Pearl, PearlId, PearlListQuery, RunId, ShellCall,
     ShellRisk, TenantId, UnitInterval,
@@ -123,10 +123,49 @@ impl EchoRetriever for MemEcho {
                     pearl_type: p.pearl_type,
                     reason: "keyword match".to_string(),
                     created_at: p.created_at,
+                    citation: None,
                 });
             }
         }
         Ok(hits)
+    }
+}
+
+#[derive(Clone, Default)]
+struct NullDocs;
+
+#[async_trait]
+impl DocumentStore for NullDocs {
+    async fn ingest_document_path(
+        &self,
+        _tenant_id: TenantId,
+        _agent_id: AgentId,
+        _path: &std::path::Path,
+    ) -> Result<Uuid, LoreleiError> {
+        Err(LoreleiError::Unsupported("docs not available".to_string()))
+    }
+
+    async fn get_document_chunk_for_echo(
+        &self,
+        _tenant_id: TenantId,
+        _chunk_id: Uuid,
+    ) -> Result<
+        Option<(
+            String,
+            lorelei_core::types::EchoCitation,
+            chrono::DateTime<chrono::Utc>,
+        )>,
+        LoreleiError,
+    > {
+        Ok(None)
+    }
+
+    async fn soft_delete_document(
+        &self,
+        _tenant_id: TenantId,
+        _document_id: Uuid,
+    ) -> Result<(), LoreleiError> {
+        Ok(())
     }
 }
 
@@ -197,6 +236,7 @@ fn test_config(allow_network_tools: bool) -> LoreleiConfig {
             allow_shell_execution: false,
             allow_network_tools,
         },
+        docs: Default::default(),
         providers,
     }
 }
@@ -221,7 +261,7 @@ async fn unknown_shell_returns_error() {
     let lore = Arc::new(MemLoreStore::default());
     let echo = Arc::new(MemEcho { lore: lore.clone() });
     let calls = Arc::new(MemShellCalls::default());
-    let reg = BuiltinShellRegistry::new(cfg, lore, echo, calls);
+    let reg = BuiltinShellRegistry::new(cfg, lore, echo, Arc::new(NullDocs), calls);
 
     let err = reg
         .call(shell_call("does_not_exist", json!({})))
@@ -236,7 +276,7 @@ async fn invalid_json_input_returns_validation_error() {
     let lore = Arc::new(MemLoreStore::default());
     let echo = Arc::new(MemEcho { lore: lore.clone() });
     let calls = Arc::new(MemShellCalls::default());
-    let reg = BuiltinShellRegistry::new(cfg, lore, echo, calls);
+    let reg = BuiltinShellRegistry::new(cfg, lore, echo, Arc::new(NullDocs), calls);
 
     let err = reg.call(shell_call("echo", json!({}))).await.unwrap_err();
     assert!(matches!(err, LoreleiError::Validation { .. }));
@@ -248,7 +288,7 @@ async fn save_pearl_creates_a_pearl() {
     let lore = Arc::new(MemLoreStore::default());
     let echo = Arc::new(MemEcho { lore: lore.clone() });
     let calls = Arc::new(MemShellCalls::default());
-    let reg = BuiltinShellRegistry::new(cfg, lore.clone(), echo, calls);
+    let reg = BuiltinShellRegistry::new(cfg, lore.clone(), echo, Arc::new(NullDocs), calls);
 
     let _ = reg
         .call(shell_call(
@@ -271,7 +311,7 @@ async fn echo_lore_retrieves_pearls() {
     let lore = Arc::new(MemLoreStore::default());
     let echo = Arc::new(MemEcho { lore: lore.clone() });
     let calls = Arc::new(MemShellCalls::default());
-    let reg = BuiltinShellRegistry::new(cfg, lore.clone(), echo, calls);
+    let reg = BuiltinShellRegistry::new(cfg, lore.clone(), echo, Arc::new(NullDocs), calls);
 
     let _ = reg
         .call(shell_call(
@@ -296,7 +336,7 @@ async fn forget_pearl_is_marked_high_risk() {
     let lore = Arc::new(MemLoreStore::default());
     let echo = Arc::new(MemEcho { lore: lore.clone() });
     let calls = Arc::new(MemShellCalls::default());
-    let reg = BuiltinShellRegistry::new(cfg, lore, echo, calls);
+    let reg = BuiltinShellRegistry::new(cfg, lore, echo, Arc::new(NullDocs), calls);
 
     let specs = reg.specs();
     let fp = specs.iter().find(|s| s.name == "forget_pearl").unwrap();
@@ -309,7 +349,7 @@ async fn http_get_disabled_when_network_tools_disabled() {
     let lore = Arc::new(MemLoreStore::default());
     let echo = Arc::new(MemEcho { lore: lore.clone() });
     let calls = Arc::new(MemShellCalls::default());
-    let reg = BuiltinShellRegistry::new(cfg, lore, echo, calls);
+    let reg = BuiltinShellRegistry::new(cfg, lore, echo, Arc::new(NullDocs), calls);
 
     let err = reg
         .call(shell_call(

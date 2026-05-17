@@ -8,8 +8,8 @@ use lorelei_core::traits::{
     CurrentStore, EchoRetriever, LoreStore, ShellRegistry, SirenPolicy, SongProvider,
 };
 use lorelei_core::types::{
-    AgentId, CurrentEvent, CurrentEventType, EchoHit, EchoQuery, EchoSources, NewPearl, Pearl, PearlId,
-    PearlListQuery, PearlType, Run, RunId, RunStatus, ShellCall, ShellResult, SongChunk,
+    AgentId, CurrentEvent, CurrentEventType, EchoHit, EchoQuery, EchoSources, NewPearl, Pearl,
+    PearlId, PearlListQuery, PearlType, Run, RunId, RunStatus, ShellCall, ShellResult, SongChunk,
     SongRequest, SongResponse, TenantId, UnitInterval,
 };
 use lorelei_siren::policy::DeterministicSirenPolicy;
@@ -316,6 +316,7 @@ fn cfg() -> LoreleiConfig {
             allow_shell_execution: false,
             allow_network_tools: false,
         },
+        docs: Default::default(),
         providers,
     }
 }

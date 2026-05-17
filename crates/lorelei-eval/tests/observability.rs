@@ -1,6 +1,6 @@
 use lorelei_core::config::LoreleiConfig;
 use lorelei_core::error::LoreleiError;
-use lorelei_core::traits::{EchoRetriever, LoreStore, SongProvider};
+use lorelei_core::traits::{DocumentStore, EchoRetriever, LoreStore, SongProvider};
 use lorelei_core::types::{AgentId, EchoQuery, PearlId, RunId, RunStatus, TenantId};
 use lorelei_shells::registry::BuiltinShellRegistry;
 use lorelei_shells::repo::NullShellCallRepository;
@@ -10,6 +10,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tracing_subscriber::fmt::MakeWriter;
 use uuid::Uuid;
+
+static TEST_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
 
 fn repo_root() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -38,6 +40,44 @@ impl MakeWriter<'_> for MakeBufWriter {
 
     fn make_writer(&self) -> Self::Writer {
         BufWriter(self.0.clone())
+    }
+}
+
+#[derive(Clone, Default)]
+struct NullDocs;
+
+#[async_trait::async_trait]
+impl DocumentStore for NullDocs {
+    async fn ingest_document_path(
+        &self,
+        _tenant_id: TenantId,
+        _agent_id: AgentId,
+        _path: &std::path::Path,
+    ) -> Result<Uuid, LoreleiError> {
+        Err(LoreleiError::Unsupported("docs not available".to_string()))
+    }
+
+    async fn get_document_chunk_for_echo(
+        &self,
+        _tenant_id: TenantId,
+        _chunk_id: Uuid,
+    ) -> Result<
+        Option<(
+            String,
+            lorelei_core::types::EchoCitation,
+            chrono::DateTime<chrono::Utc>,
+        )>,
+        LoreleiError,
+    > {
+        Ok(None)
+    }
+
+    async fn soft_delete_document(
+        &self,
+        _tenant_id: TenantId,
+        _document_id: Uuid,
+    ) -> Result<(), LoreleiError> {
+        Ok(())
     }
 }
 
@@ -250,6 +290,10 @@ impl EchoRetriever for LoggingEcho {
 
 #[tokio::test(flavor = "current_thread")]
 async fn logs_include_run_id_and_redact_prompts_by_default() {
+    let _lock = TEST_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await;
     std::env::remove_var("LORELEI_LOG_PROMPTS");
 
     let buf = Arc::new(Mutex::new(Vec::<u8>::new()));
@@ -272,6 +316,7 @@ async fn logs_include_run_id_and_redact_prompts_by_default() {
         cfg.clone(),
         lore.clone(),
         echo.clone(),
+        Arc::new(NullDocs),
         Arc::new(NullShellCallRepository),
     ));
     let siren = Arc::new(DeterministicSirenPolicy::new(cfg.clone()).with_llm_policy_enabled(false));
@@ -320,6 +365,10 @@ async fn logs_include_run_id_and_redact_prompts_by_default() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn full_prompt_logging_only_when_enabled() {
+    let _lock = TEST_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await;
     std::env::set_var("LORELEI_LOG_PROMPTS", "true");
 
     let buf = Arc::new(Mutex::new(Vec::<u8>::new()));
@@ -340,6 +389,7 @@ async fn full_prompt_logging_only_when_enabled() {
         cfg.clone(),
         lore.clone(),
         echo.clone(),
+        Arc::new(NullDocs),
         Arc::new(NullShellCallRepository),
     ));
     let siren = Arc::new(DeterministicSirenPolicy::new(cfg.clone()));

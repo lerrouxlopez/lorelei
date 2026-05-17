@@ -1,5 +1,7 @@
 use lorelei_core::traits::{EchoRetriever, LoreStore};
-use lorelei_core::types::{AgentId, EchoQuery, EchoSources, NewPearl, PearlType, TenantId, UnitInterval};
+use lorelei_core::types::{
+    AgentId, EchoQuery, EchoSources, NewPearl, PearlType, TenantId, UnitInterval,
+};
 use lorelei_echo::retriever::{EchoEngine, EchoRetrievalConfig};
 use lorelei_lore::embedding::{DeterministicMockEmbeddingProvider, EmbeddingProvider};
 use lorelei_lore::pg::PgLoreStore;

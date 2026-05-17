@@ -421,8 +421,7 @@ impl ShellTool for DocumentIngestTool {
     fn spec(&self) -> ShellSpec {
         ShellSpec {
             name: "document_ingest",
-            description:
-                "Ingest a local text/Markdown document into The Reef (directory-limited).",
+            description: "Ingest a local text/Markdown document into The Reef (directory-limited).",
             input_schema: schema_for::<DocumentIngestInput>(),
             risk: ShellRisk::Medium,
         }
@@ -432,7 +431,11 @@ impl ShellTool for DocumentIngestTool {
         let input: DocumentIngestInput = decode_input(&call)?;
         let id = self
             .documents
-            .ingest_document_path(call.tenant_id, call.agent_id, std::path::Path::new(&input.path))
+            .ingest_document_path(
+                call.tenant_id,
+                call.agent_id,
+                std::path::Path::new(&input.path),
+            )
             .await?;
         Ok(ok(call.call_id, json!({ "document_id": id })))
     }

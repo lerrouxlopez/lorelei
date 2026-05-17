@@ -5,6 +5,7 @@ use lorelei_core::config::{
     SirenConfig,
 };
 use lorelei_core::error::LoreleiError;
+use lorelei_core::traits::DocumentStore;
 use lorelei_core::traits::{EchoRetriever, LoreStore};
 use lorelei_core::types::{
     AgentId, EchoHit, EchoQuery, NewPearl, Pearl, PearlId, PearlListQuery, TenantId, UnitInterval,
@@ -159,6 +160,7 @@ fn minimal_state() -> AppState {
             allow_shell_execution: false,
             allow_network_tools: false,
         },
+        docs: Default::default(),
         providers,
     };
 
@@ -179,6 +181,7 @@ fn minimal_state() -> AppState {
         cfg.clone(),
         lore_store.clone(),
         echo.clone(),
+        Arc::new(NullDocs),
         Arc::new(NullShellCallRepository),
     ));
 
@@ -210,6 +213,7 @@ fn minimal_state() -> AppState {
         siren,
         tide,
         autonomy,
+        documents: Arc::new(NullDocs),
     }
 }
 
@@ -258,6 +262,7 @@ async fn env_state() -> Option<AppState> {
             allow_shell_execution: false,
             allow_network_tools: false,
         },
+        docs: Default::default(),
         providers,
     };
 
@@ -307,6 +312,7 @@ async fn env_state() -> Option<AppState> {
         cfg.clone(),
         lore_store_arc.clone(),
         echo_engine.clone(),
+        Arc::new(NullDocs),
         Arc::new(NullShellCallRepository),
     ));
     let tide: Arc<SingleAgentTideRuntime> = Arc::new(SingleAgentTideRuntime::new(
@@ -335,6 +341,7 @@ async fn env_state() -> Option<AppState> {
         siren,
         tide,
         autonomy,
+        documents: Arc::new(NullDocs),
     })
 }
 
@@ -559,4 +566,40 @@ async fn provider_endpoint_redacts_secrets() {
     let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     let s = v.to_string();
     assert!(!s.contains("api_key_env"));
+}
+#[derive(Clone, Default)]
+struct NullDocs;
+#[async_trait::async_trait]
+impl DocumentStore for NullDocs {
+    async fn ingest_document_path(
+        &self,
+        _tenant_id: lorelei_core::types::TenantId,
+        _agent_id: lorelei_core::types::AgentId,
+        _path: &std::path::Path,
+    ) -> Result<Uuid, LoreleiError> {
+        Err(LoreleiError::Unsupported("docs not available".to_string()))
+    }
+
+    async fn get_document_chunk_for_echo(
+        &self,
+        _tenant_id: lorelei_core::types::TenantId,
+        _chunk_id: Uuid,
+    ) -> Result<
+        Option<(
+            String,
+            lorelei_core::types::EchoCitation,
+            chrono::DateTime<chrono::Utc>,
+        )>,
+        LoreleiError,
+    > {
+        Ok(None)
+    }
+
+    async fn soft_delete_document(
+        &self,
+        _tenant_id: lorelei_core::types::TenantId,
+        _document_id: Uuid,
+    ) -> Result<(), LoreleiError> {
+        Ok(())
+    }
 }

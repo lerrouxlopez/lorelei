@@ -6,8 +6,8 @@ use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
 use axum::routing::delete;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use lorelei_core::config::LoreleiConfig;
 use lorelei_core::error::LoreleiError;
@@ -17,8 +17,8 @@ use lorelei_core::types::{
     ShellRisk, UnitInterval,
 };
 use lorelei_echo::retriever::{EchoEngine, EchoRetrievalConfig};
-use lorelei_lore::embedding::{DynSongProviderEmbeddingAdapter, EmbeddingProvider};
 use lorelei_lore::docs::PgDocumentStore;
+use lorelei_lore::embedding::{DynSongProviderEmbeddingAdapter, EmbeddingProvider};
 use lorelei_lore::pg::PgLoreStore;
 use lorelei_lore::qdrant::QdrantPearlIndex;
 use lorelei_shells::registry::BuiltinShellRegistry;
@@ -28,7 +28,7 @@ use lorelei_song::registry::ProviderRegistry;
 use lorelei_tide::runtime::SingleAgentTideRuntime;
 use qdrant_client::Qdrant;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use sqlx::PgPool;
 use std::sync::Arc;
 use tracing::info;
@@ -202,10 +202,13 @@ pub async fn build_state() -> Result<AppState, LoreleiError> {
         .iter()
         .map(std::path::PathBuf::from)
         .collect::<Vec<_>>();
+    let doc_embedder: Arc<dyn EmbeddingProvider> = Arc::new(DynSongProviderEmbeddingAdapter::new(
+        providers.get(&config.agent.default_embedding_provider)?,
+    ));
     let documents: Arc<dyn lorelei_core::traits::DocumentStore> = Arc::new(PgDocumentStore::new(
         pg_pool.clone(),
         qdrant_index.clone(),
-        DynSongProviderEmbeddingAdapter::new(providers.get(&config.agent.default_embedding_provider)?),
+        doc_embedder,
         config.agent.default_embedding_provider.clone(),
         allowed_dirs,
     ));
@@ -494,7 +497,9 @@ pub struct EchoRequest {
 }
 
 fn parse_sources(s: Option<String>) -> Result<lorelei_core::types::EchoSources, LoreleiError> {
-    let Some(s) = s else { return Ok(lorelei_core::types::EchoSources::Pearls) };
+    let Some(s) = s else {
+        return Ok(lorelei_core::types::EchoSources::Pearls);
+    };
     match s.trim().to_ascii_lowercase().as_str() {
         "pearls" => Ok(lorelei_core::types::EchoSources::Pearls),
         "documents" | "docs" => Ok(lorelei_core::types::EchoSources::Documents),

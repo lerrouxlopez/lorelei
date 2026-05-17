@@ -315,6 +315,10 @@ async fn qdrant_only_hit_missing_postgres_row_is_ignored() {
     let fake = VectorHit {
         pearl_id: lorelei_core::types::PearlId(Uuid::new_v4()),
         score: 0.99,
+        source_type: Some("pearl".to_string()),
+        document_id: None,
+        chunk_index: None,
+        title: None,
     };
 
     let (resolved, ignored) = resolve_hits(&store, tenant_id, vec![fake])

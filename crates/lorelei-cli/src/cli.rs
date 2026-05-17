@@ -393,4 +393,28 @@ mod tests {
             _ => panic!("expected run"),
         }
     }
+
+    #[test]
+    fn clap_parses_docs_commands() {
+        let cli = Cli::try_parse_from(["lore", "docs", "ingest", "README.md"]).unwrap();
+        match cli.command {
+            Command::Docs(d) => match d.command {
+                DocsCommand::Ingest(i) => assert_eq!(i.path, "README.md"),
+                _ => panic!("expected docs ingest"),
+            },
+            _ => panic!("expected docs"),
+        }
+
+        let cli = Cli::try_parse_from(["lore", "docs", "search", "tea", "--top-k", "3"]).unwrap();
+        match cli.command {
+            Command::Docs(d) => match d.command {
+                DocsCommand::Search(s) => {
+                    assert_eq!(s.query, "tea");
+                    assert_eq!(s.top_k, Some(3));
+                }
+                _ => panic!("expected docs search"),
+            },
+            _ => panic!("expected docs"),
+        }
+    }
 }

@@ -4,7 +4,7 @@ use crate::embedding::EmbeddingProvider;
 use crate::qdrant::QdrantPearlIndex;
 use lorelei_core::error::LoreleiError;
 use lorelei_core::traits::DocumentStore;
-use lorelei_core::types::{AgentId, EchoCitation, PearlId, TenantId};
+use lorelei_core::types::{AgentId, EchoCitation, TenantId};
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row};
 use std::path::{Path, PathBuf};
@@ -54,7 +54,12 @@ impl PgDocumentStore {
     }
 
     fn mime_for_path(path: &Path) -> &'static str {
-        match path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase().as_str()
+        match path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase()
+            .as_str()
         {
             "md" | "markdown" => "text/markdown",
             _ => "text/plain",
@@ -109,11 +114,7 @@ impl PgDocumentStore {
     ) -> Result<(), LoreleiError> {
         let vectors = self
             .embedder
-            .embed(
-                tenant_id,
-                &self.embedding_provider,
-                chunks.iter().cloned().collect(),
-            )
+            .embed(tenant_id, &self.embedding_provider, chunks.to_vec())
             .await?;
 
         let size = vectors.vectors.first().map(|v| v.len()).unwrap_or(0) as u64;
@@ -146,12 +147,14 @@ values ($1,$2,$3,$4,$5,$6,$7)
             if let Some(vec) = vectors.vectors.get(idx).cloned() {
                 self.index
                     .upsert_document_chunk_vector(
-                        tenant_id,
-                        agent_id,
-                        document_id,
-                        chunk_id,
-                        idx as i32,
-                        title,
+                        crate::qdrant::DocumentChunkVectorMeta {
+                            tenant_id,
+                            agent_id,
+                            document_id,
+                            chunk_id,
+                            chunk_index: idx as i32,
+                            title: title.to_string(),
+                        },
                         vec,
                     )
                     .await?;
@@ -284,7 +287,10 @@ where id = $1 and tenant_id = $2 and deleted_at is null
             return Err(LoreleiError::NotFound("document not found".to_string()));
         }
         // Best-effort: remove vectors for this document.
-        let _ = self.index.delete_document_vectors(tenant_id, document_id).await;
+        let _ = self
+            .index
+            .delete_document_vectors(tenant_id, document_id)
+            .await;
         Ok(())
     }
 }

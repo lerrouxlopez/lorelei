@@ -26,6 +26,16 @@ pub struct VectorHit {
     pub title: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct DocumentChunkVectorMeta {
+    pub tenant_id: TenantId,
+    pub agent_id: AgentId,
+    pub document_id: Uuid,
+    pub chunk_id: Uuid,
+    pub chunk_index: i32,
+    pub title: String,
+}
+
 impl QdrantPearlIndex {
     pub fn new(client: Qdrant, collection: impl Into<String>) -> Self {
         Self {
@@ -66,24 +76,27 @@ impl QdrantPearlIndex {
 
     pub async fn upsert_document_chunk_vector(
         &self,
-        tenant_id: TenantId,
-        agent_id: AgentId,
-        document_id: Uuid,
-        chunk_id: Uuid,
-        chunk_index: i32,
-        title: &str,
+        meta: DocumentChunkVectorMeta,
         vector: Vec<f32>,
     ) -> Result<(), LoreleiError> {
-        let mut payload: HashMap<String, qdrant_client::qdrant::Value> = HashMap::new();
+        let mut payload: HashMap<String, serde_json::Value> = HashMap::new();
         payload.insert("source_type".to_string(), "document_chunk".into());
-        payload.insert("pearl_id".to_string(), chunk_id.to_string().into());
-        payload.insert("tenant_id".to_string(), tenant_id.0.to_string().into());
-        payload.insert("agent_id".to_string(), agent_id.0.to_string().into());
-        payload.insert("document_id".to_string(), document_id.to_string().into());
-        payload.insert("chunk_index".to_string(), chunk_index.into());
-        payload.insert("title".to_string(), title.to_string().into());
+        payload.insert("pearl_id".to_string(), meta.chunk_id.to_string().into());
+        payload.insert("tenant_id".to_string(), meta.tenant_id.0.to_string().into());
+        payload.insert("agent_id".to_string(), meta.agent_id.0.to_string().into());
+        payload.insert(
+            "document_id".to_string(),
+            meta.document_id.to_string().into(),
+        );
+        payload.insert("chunk_index".to_string(), meta.chunk_index.into());
+        payload.insert("title".to_string(), meta.title.into());
 
-        let point = PointStruct::new(PointId::from(chunk_id), vector, payload);
+        let point_id = PointId {
+            point_id_options: Some(qdrant_client::qdrant::point_id::PointIdOptions::Uuid(
+                meta.chunk_id.to_string(),
+            )),
+        };
+        let point = PointStruct::new(point_id, vector, payload);
         self.client
             .upsert_points(UpsertPointsBuilder::new(
                 self.collection.clone(),
@@ -128,7 +141,11 @@ impl QdrantPearlIndex {
                     .get("document_id")
                     .and_then(|v| v.as_str())
                     .and_then(|s| Uuid::parse_str(s).ok()),
-                chunk_index: p.payload.get("chunk_index").and_then(|v| v.as_integer()).map(|i| i as i32),
+                chunk_index: p
+                    .payload
+                    .get("chunk_index")
+                    .and_then(|v| v.as_integer())
+                    .map(|i| i as i32),
                 title: p
                     .payload
                     .get("title")
@@ -172,7 +189,11 @@ impl QdrantPearlIndex {
                     .get("document_id")
                     .and_then(|v| v.as_str())
                     .and_then(|s| Uuid::parse_str(s).ok()),
-                chunk_index: p.payload.get("chunk_index").and_then(|v| v.as_integer()).map(|i| i as i32),
+                chunk_index: p
+                    .payload
+                    .get("chunk_index")
+                    .and_then(|v| v.as_integer())
+                    .map(|i| i as i32),
                 title: p
                     .payload
                     .get("title")
@@ -219,21 +240,11 @@ impl QdrantPearlIndex {
     }
 }
 
-fn tenant_filter(tenant_id: TenantId, agent_id: Option<AgentId>) -> Filter {
-    if let Some(agent) = agent_id {
-        Filter::must([
-            qdrant_client::qdrant::Condition::matches("tenant_id", tenant_id.0.to_string()),
-            qdrant_client::qdrant::Condition::matches("agent_id", agent.0.to_string()),
-        ])
-    } else {
-        Filter::must([qdrant_client::qdrant::Condition::matches(
-            "tenant_id",
-            tenant_id.0.to_string(),
-        )])
-    }
-}
-
-fn tenant_filter_with_source(tenant_id: TenantId, agent_id: Option<AgentId>, source: &str) -> Filter {
+fn tenant_filter_with_source(
+    tenant_id: TenantId,
+    agent_id: Option<AgentId>,
+    source: &str,
+) -> Filter {
     if let Some(agent) = agent_id {
         Filter::must([
             qdrant_client::qdrant::Condition::matches("tenant_id", tenant_id.0.to_string()),

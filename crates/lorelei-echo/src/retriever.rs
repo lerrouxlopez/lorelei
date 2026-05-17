@@ -12,6 +12,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, info, warn};
+use uuid::Uuid;
 
 pub struct EchoRetrievalConfig {
     pub rerank_top_k: usize,
@@ -199,19 +200,36 @@ impl EchoRetriever for EchoEngine {
 
         // Collect hits across variants; keep max vector score per id.
         let mut best_vec: HashMap<PearlId, f32> = HashMap::new();
-        let mut best_meta: HashMap<PearlId, (Option<uuid::Uuid>, Option<i32>, Option<String>)> =
+        let mut best_meta: HashMap<PearlId, (Option<Uuid>, Option<i32>, Option<String>)> =
             HashMap::new();
         for v in emb.vectors {
-            let mut all_hits = Vec::new();
-            match query.sources {
+            let all_hits = match query.sources {
                 EchoSources::Pearls => {
-                    all_hits = self
-                        .index
+                    self.index
                         .search_pearl_vectors(tenant_id, v, query.top_k as u64, Some(agent_id))
-                        .await?;
+                        .await?
                 }
                 EchoSources::Documents => {
-                    all_hits = self
+                    self.index
+                        .search_document_chunk_vectors(
+                            tenant_id,
+                            v,
+                            query.top_k as u64,
+                            Some(agent_id),
+                        )
+                        .await?
+                }
+                EchoSources::All => {
+                    let mut p = self
+                        .index
+                        .search_pearl_vectors(
+                            tenant_id,
+                            v.clone(),
+                            query.top_k as u64,
+                            Some(agent_id),
+                        )
+                        .await?;
+                    let mut d = self
                         .index
                         .search_document_chunk_vectors(
                             tenant_id,
@@ -220,20 +238,10 @@ impl EchoRetriever for EchoEngine {
                             Some(agent_id),
                         )
                         .await?;
-                }
-                EchoSources::All => {
-                    let mut p = self
-                        .index
-                        .search_pearl_vectors(tenant_id, v.clone(), query.top_k as u64, Some(agent_id))
-                        .await?;
-                    let mut d = self
-                        .index
-                        .search_document_chunk_vectors(tenant_id, v, query.top_k as u64, Some(agent_id))
-                        .await?;
                     p.append(&mut d);
-                    all_hits = p;
+                    p
                 }
-            }
+            };
             for h in all_hits {
                 best_vec
                     .entry(h.pearl_id)
@@ -258,7 +266,13 @@ impl EchoRetriever for EchoEngine {
 
         // Fetch pearls (and/or document chunks) from Postgres (source of truth) and filter.
         let mut pearls: Vec<(Pearl, f32)> = Vec::new();
-        let mut doc_chunks: Vec<(PearlId, f32, lorelei_core::types::EchoCitation, chrono::DateTime<chrono::Utc>, String)> = Vec::new();
+        let mut doc_chunks: Vec<(
+            PearlId,
+            f32,
+            lorelei_core::types::EchoCitation,
+            chrono::DateTime<chrono::Utc>,
+            String,
+        )> = Vec::new();
         let mut missing = Vec::new();
         let candidate_count = best_vec.len();
         for (id, vec_score) in best_vec {
@@ -329,18 +343,27 @@ impl EchoRetriever for EchoEngine {
         }
 
         for (chunk_id, vec_score, citation, created_at, content) in doc_chunks {
-            let dup = if seen_content.contains(&content) { 0.15 } else { 0.0 };
-            let (score, reason) = Self::combined_score(vec_score, &Pearl {
-                pearl_id: chunk_id,
-                tenant_id,
-                agent_id,
-                pearl_type: PearlType::Other,
-                content: content.clone(),
-                importance: UnitInterval::new(0.5)?,
-                confidence: UnitInterval::new(1.0)?,
-                created_at,
-                metadata: Default::default(),
-            }, None, dup)?;
+            let dup = if seen_content.contains(&content) {
+                0.15
+            } else {
+                0.0
+            };
+            let (score, reason) = Self::combined_score(
+                vec_score,
+                &Pearl {
+                    pearl_id: chunk_id,
+                    tenant_id,
+                    agent_id,
+                    pearl_type: PearlType::Other,
+                    content: content.clone(),
+                    importance: UnitInterval::new(0.5)?,
+                    confidence: UnitInterval::new(1.0)?,
+                    created_at,
+                    metadata: Default::default(),
+                },
+                None,
+                dup,
+            )?;
             let hit = EchoHit {
                 score,
                 pearl_id: chunk_id,

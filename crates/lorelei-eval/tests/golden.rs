@@ -4,7 +4,8 @@ use lorelei_core::config::LoreleiConfig;
 use lorelei_core::error::LoreleiError;
 use lorelei_core::traits::{EchoRetriever, LoreStore, SongProvider};
 use lorelei_core::types::{
-    AgentId, EchoQuery, EchoSources, NewPearl, PearlId, PearlType, RunStatus, TenantId, UnitInterval,
+    AgentId, EchoQuery, EchoSources, NewPearl, PearlId, PearlType, RunStatus, TenantId,
+    UnitInterval,
 };
 use lorelei_echo::retriever::{EchoEngine, EchoRetrievalConfig};
 use lorelei_harbor::http::server::{router, AppState};
@@ -90,9 +91,46 @@ fn minimal_state_for_readyz_failure() -> AppState {
         AgentConfig, EchoConfig, HarborConfig, LoreConfig, LoreleiConfig, ProviderConfig,
         ProviderKind, SirenConfig,
     };
+    use lorelei_core::traits::DocumentStore;
     use lorelei_core::traits::{EchoRetriever, LoreStore};
     use lorelei_shells::registry::BuiltinShellRegistry;
     use lorelei_shells::repo::NullShellCallRepository;
+    #[derive(Clone, Default)]
+    struct NullDocs;
+    #[async_trait::async_trait]
+    impl DocumentStore for NullDocs {
+        async fn ingest_document_path(
+            &self,
+            _tenant_id: TenantId,
+            _agent_id: AgentId,
+            _path: &std::path::Path,
+        ) -> Result<Uuid, LoreleiError> {
+            Err(LoreleiError::Unsupported("docs not available".to_string()))
+        }
+
+        async fn get_document_chunk_for_echo(
+            &self,
+            _tenant_id: TenantId,
+            _chunk_id: Uuid,
+        ) -> Result<
+            Option<(
+                String,
+                lorelei_core::types::EchoCitation,
+                chrono::DateTime<chrono::Utc>,
+            )>,
+            LoreleiError,
+        > {
+            Ok(None)
+        }
+
+        async fn soft_delete_document(
+            &self,
+            _tenant_id: TenantId,
+            _document_id: Uuid,
+        ) -> Result<(), LoreleiError> {
+            Ok(())
+        }
+    }
     #[derive(Default)]
     struct MemLoreStore {
         pearls: Mutex<Vec<lorelei_core::types::Pearl>>,
@@ -203,6 +241,7 @@ fn minimal_state_for_readyz_failure() -> AppState {
             allow_shell_execution: false,
             allow_network_tools: false,
         },
+        docs: Default::default(),
         providers,
     };
 
@@ -225,6 +264,7 @@ fn minimal_state_for_readyz_failure() -> AppState {
         cfg.clone(),
         lore_store.clone(),
         echo.clone(),
+        Arc::new(NullDocs),
         Arc::new(NullShellCallRepository),
     ));
 
@@ -252,6 +292,7 @@ fn minimal_state_for_readyz_failure() -> AppState {
         siren,
         tide,
         autonomy,
+        documents: Arc::new(NullDocs),
     }
 }
 
@@ -670,6 +711,7 @@ async fn preference_pearl_affects_final_answer_context() {
                 pearl_type: PearlType::Preference,
                 reason: "golden".to_string(),
                 created_at: chrono::Utc::now(),
+                citation: None,
             }])
         }
     }

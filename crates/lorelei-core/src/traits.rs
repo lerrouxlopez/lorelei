@@ -103,7 +103,11 @@ pub trait DocumentStore: Send + Sync {
         tenant_id: TenantId,
         chunk_id: uuid::Uuid,
     ) -> Result<
-        Option<(String, crate::types::EchoCitation, chrono::DateTime<chrono::Utc>)>,
+        Option<(
+            String,
+            crate::types::EchoCitation,
+            chrono::DateTime<chrono::Utc>,
+        )>,
         LoreleiError,
     >;
 

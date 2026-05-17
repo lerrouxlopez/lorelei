@@ -7,8 +7,9 @@ use lorelei_core::traits::{
     CurrentStore, EchoRetriever, LoreStore, ShellRegistry, SirenPolicy, SongProvider,
 };
 use lorelei_core::types::{
-    CurrentEvent, CurrentEventType, EchoHit, EchoQuery, EchoSources, NormalizedToolCall, Run, RunId,
-    RunStatus, ShellCall, ShellResult, ShellRisk, SirenDecision, SongRequest, SongResponse, TenantId,
+    CurrentEvent, CurrentEventType, EchoHit, EchoQuery, EchoSources, NormalizedToolCall, Run,
+    RunId, RunStatus, ShellCall, ShellResult, ShellRisk, SirenDecision, SongRequest, SongResponse,
+    TenantId,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};

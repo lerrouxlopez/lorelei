@@ -2,6 +2,7 @@ use lorelei_core::config::{
     AgentConfig, EchoConfig, HarborConfig, LoreConfig, LoreleiConfig, ProviderConfig, ProviderKind,
     SirenConfig,
 };
+use lorelei_core::traits::DocumentStore;
 use lorelei_core::traits::{EchoRetriever, LoreStore};
 use lorelei_core::types::{
     AgentId, EchoHit, EchoQuery, NewPearl, Pearl, PearlId, PearlListQuery, TenantId,
@@ -22,6 +23,46 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use uuid::Uuid;
+
+#[derive(Clone, Default)]
+struct NullDocs;
+
+#[async_trait::async_trait]
+impl DocumentStore for NullDocs {
+    async fn ingest_document_path(
+        &self,
+        _tenant_id: lorelei_core::types::TenantId,
+        _agent_id: lorelei_core::types::AgentId,
+        _path: &std::path::Path,
+    ) -> Result<Uuid, lorelei_core::error::LoreleiError> {
+        Err(lorelei_core::error::LoreleiError::Unsupported(
+            "docs not available".to_string(),
+        ))
+    }
+
+    async fn get_document_chunk_for_echo(
+        &self,
+        _tenant_id: lorelei_core::types::TenantId,
+        _chunk_id: Uuid,
+    ) -> Result<
+        Option<(
+            String,
+            lorelei_core::types::EchoCitation,
+            chrono::DateTime<chrono::Utc>,
+        )>,
+        lorelei_core::error::LoreleiError,
+    > {
+        Ok(None)
+    }
+
+    async fn soft_delete_document(
+        &self,
+        _tenant_id: lorelei_core::types::TenantId,
+        _document_id: Uuid,
+    ) -> Result<(), lorelei_core::error::LoreleiError> {
+        Ok(())
+    }
+}
 
 struct ScriptedSong {
     responses: Mutex<Vec<String>>,
@@ -210,6 +251,7 @@ async fn maybe_state() -> Option<AppState> {
             allow_shell_execution: true,
             allow_network_tools: false,
         },
+        docs: Default::default(),
         providers,
     };
 
@@ -235,6 +277,7 @@ async fn maybe_state() -> Option<AppState> {
         cfg.clone(),
         lore_store.clone(),
         echo.clone(),
+        Arc::new(NullDocs),
         Arc::new(NullShellCallRepository),
     ));
 
@@ -267,6 +310,7 @@ async fn maybe_state() -> Option<AppState> {
         siren,
         tide,
         autonomy,
+        documents: Arc::new(NullDocs),
     })
 }
 
@@ -316,6 +360,7 @@ async fn maybe_state_with_song(
             allow_shell_execution: true,
             allow_network_tools: false,
         },
+        docs: Default::default(),
         providers,
     };
 
@@ -339,6 +384,7 @@ async fn maybe_state_with_song(
         cfg.clone(),
         lore_store.clone(),
         echo.clone(),
+        Arc::new(NullDocs),
         Arc::new(NullShellCallRepository),
     ));
     let siren =
@@ -370,6 +416,7 @@ async fn maybe_state_with_song(
         siren,
         tide,
         autonomy,
+        documents: Arc::new(NullDocs),
     })
 }
 

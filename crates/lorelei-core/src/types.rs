@@ -207,17 +207,12 @@ pub struct EchoQuery {
     pub sources: EchoSources,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum EchoSources {
+    #[default]
     Pearls,
     Documents,
     All,
-}
-
-impl Default for EchoSources {
-    fn default() -> Self {
-        Self::Pearls
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

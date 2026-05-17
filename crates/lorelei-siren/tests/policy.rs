@@ -55,6 +55,7 @@ fn base_config() -> LoreleiConfig {
             allow_shell_execution: false,
             allow_network_tools: false,
         },
+        docs: Default::default(),
         providers,
     }
 }

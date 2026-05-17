@@ -76,6 +76,7 @@ fn missing_api_key_produces_clear_error() {
             allow_shell_execution: false,
             allow_network_tools: false,
         },
+        docs: Default::default(),
         providers,
     };
 

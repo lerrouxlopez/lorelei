@@ -369,6 +369,7 @@ fn cfg(allow_shell_execution: bool, allow_network: bool) -> LoreleiConfig {
             allow_shell_execution,
             allow_network_tools: allow_network,
         },
+        docs: Default::default(),
         providers,
     }
 }
@@ -386,6 +387,7 @@ async fn direct_answer_path() {
             pearl_type: PearlType::Other,
             reason: "test".to_string(),
             created_at: chrono::Utc::now(),
+            citation: None,
         }],
     });
     let song = Arc::new(CapturingSong {
