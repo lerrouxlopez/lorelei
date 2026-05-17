@@ -263,6 +263,14 @@ pub async fn build_state() -> Result<AppState, LoreleiError> {
     })
 }
 
+/// Runs migrations/initialization and exits.
+///
+/// Used by the `migrate` compose service so `harbor` can wait for readiness.
+pub async fn migrate() -> Result<(), LoreleiError> {
+    let _ = build_state().await?;
+    Ok(())
+}
+
 pub async fn serve() -> Result<(), LoreleiError> {
     let state = build_state().await?;
     let addr = format!("{}:{}", state.config.harbor.host, state.config.harbor.port);
@@ -881,6 +889,8 @@ pub struct CreateRunRequest {
     pub tenant_id: Uuid,
     pub agent_id: Uuid,
     pub input: String,
+    #[serde(default, rename = "async")]
+    pub async_run: bool,
     #[serde(default)]
     pub no_memory: bool,
 }
@@ -901,6 +911,31 @@ async fn create_run(
     Json(body): Json<CreateRunRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     let request_id = request_id_from_headers_or_ext(&headers, Some(&rid));
+    if body.async_run {
+        let run_id = state
+            .tide
+            .clone()
+            .spawn_run_once_with_options(
+                lorelei_core::types::TenantId(body.tenant_id),
+                lorelei_core::types::AgentId(body.agent_id),
+                body.input,
+                !body.no_memory,
+            )
+            .await
+            .map_err(|e| map_err(e, request_id))?;
+
+        return Ok((
+            StatusCode::ACCEPTED,
+            Json(RunResponse {
+                run_id: run_id.0,
+                tenant_id: body.tenant_id,
+                agent_id: body.agent_id,
+                status: RunStatus::Running,
+                output: None,
+            }),
+        ));
+    }
+
     let res = state
         .tide
         .run_once_with_options(

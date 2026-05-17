@@ -1,0 +1,47 @@
+# Reef (Docker Compose) configuration using the built-in mock provider.
+#
+# Intended for:
+# - smoke tests
+# - CI
+# - first-run local setup (no external API keys required)
+#
+# Usage (from repo root):
+#   cp configs/reef-mock.toml lorelei.toml
+#   cp .env.example .env
+#   docker compose up --build -d
+
+[agent]
+tenant_id = "00000000-0000-0000-0000-000000000001"
+agent_id = "00000000-0000-0000-0000-000000000002"
+default_provider = "mock"
+default_embedding_provider = "mock"
+
+[harbor]
+host = "0.0.0.0"
+port = 8080
+
+[lore]
+postgres_url_env = "DATABASE_URL"
+qdrant_url_env = "QDRANT_URL"
+collection = "lorelei_mock"
+
+[echo]
+top_k = 20
+rerank_top_k = 10
+min_confidence = 0.25
+
+[siren]
+require_approval_for_high_risk = true
+allow_shell_execution = true
+allow_network_tools = false
+
+[docs]
+allowed_dirs = ["./docs", "./prompts"]
+
+[providers.mock]
+kind = "mock"
+base_url = "http://127.0.0.1:0"
+api_key_env = "LORELEI_MOCK_API_KEY"
+chat_model = "mock-chat"
+embedding_model = "mock-embed"
+

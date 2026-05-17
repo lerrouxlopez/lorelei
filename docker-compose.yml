@@ -1,6 +1,26 @@
 name: lorelei
 
 services:
+  migrate:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    env_file:
+      - .env
+    volumes:
+      - ./lorelei.toml:/app/lorelei.toml:ro
+    environment:
+      LORELEI_CONFIG: ${LORELEI_CONFIG:-/app/lorelei.toml}
+      DATABASE_URL: ${DATABASE_URL:-postgres://lorelei:lorelei@postgres:5432/lorelei}
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6334}
+      RUST_LOG: ${RUST_LOG:-info}
+    command: ["lorelei-harbor", "migrate"]
+
   postgres:
     image: postgres:16-alpine
     environment:
@@ -33,6 +53,7 @@ services:
 
   ollama:
     image: ollama/ollama:latest
+    profiles: ["ollama"]
     ports:
       - "11434:11434"
     volumes:
@@ -46,6 +67,7 @@ services:
 
   ollama-pull:
     image: curlimages/curl:8.12.1
+    profiles: ["ollama"]
     depends_on:
       ollama:
         condition: service_healthy
@@ -63,11 +85,11 @@ services:
       context: .
       dockerfile: docker/Dockerfile
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       qdrant:
-        condition: service_healthy
-      ollama:
         condition: service_healthy
     env_file:
       - .env
@@ -95,6 +117,8 @@ services:
     depends_on:
       harbor:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     env_file:
       - .env
     volumes:

@@ -142,6 +142,85 @@ impl SingleAgentTideRuntime {
         .await
     }
 
+    /// Starts a run in the background and returns `run_id` immediately.
+    ///
+    /// Intended for clients that want to poll `/v1/runs/:run_id` and
+    /// `/v1/runs/:run_id/currents` for live progress.
+    pub async fn spawn_run_once_with_options(
+        self: Arc<Self>,
+        tenant_id: TenantId,
+        agent_id: lorelei_core::types::AgentId,
+        user_input: String,
+        enable_memory: bool,
+    ) -> Result<RunId, LoreleiError> {
+        let span = info_span!(
+            "tide.run_once_spawned",
+            tenant_id = %tenant_id.0,
+            agent_id = %agent_id.0,
+            run_id = field::Empty
+        );
+
+        async move {
+            // Create run and record user event synchronously so the run is visible immediately.
+            let run = self
+                .runs
+                .create_run(tenant_id, agent_id, &user_input)
+                .instrument(info_span!("tide.create_run"))
+                .await?;
+            tracing::Span::current().record("run_id", tracing::field::display(run.run_id.0));
+
+            let user_event_id = lorelei_core::types::EchoId(Uuid::new_v4());
+            self.append_current(
+                tenant_id,
+                agent_id,
+                run.run_id,
+                user_event_id,
+                CurrentEventType::User,
+                "user message",
+                json!({ "text": user_input.clone() }),
+            )
+            .instrument(info_span!("tide.current_user"))
+            .await?;
+
+            let runtime = Arc::clone(&self);
+            let run_id = run.run_id;
+            tokio::spawn(async move {
+                let res = runtime
+                    .run_existing_inner(
+                        tenant_id,
+                        agent_id,
+                        None,
+                        run_id,
+                        user_input,
+                        enable_memory,
+                    )
+                    .await;
+                if let Err(e) = res {
+                    let msg = format!("{e}");
+                    let _ = runtime
+                        .append_current(
+                            tenant_id,
+                            agent_id,
+                            run_id,
+                            lorelei_core::types::EchoId(Uuid::new_v4()),
+                            CurrentEventType::System,
+                            "run failed",
+                            json!({ "error": msg }),
+                        )
+                        .await;
+                    let _ = runtime
+                        .runs
+                        .complete_run(tenant_id, agent_id, run_id, RunStatus::Failed)
+                        .await;
+                }
+            });
+
+            Ok(run.run_id)
+        }
+        .instrument(span)
+        .await
+    }
+
     pub async fn run_task_once_with_options(
         &self,
         tenant_id: TenantId,
@@ -201,6 +280,42 @@ impl SingleAgentTideRuntime {
         .instrument(info_span!("tide.current_user"))
         .await?;
 
+        self.run_existing_inner(
+            tenant_id,
+            agent_id,
+            task_id,
+            run.run_id,
+            user_input,
+            enable_memory,
+        )
+            .await
+    }
+
+    async fn run_existing_inner(
+        &self,
+        tenant_id: TenantId,
+        agent_id: lorelei_core::types::AgentId,
+        task_id: Option<lorelei_core::types::AutonomousTaskId>,
+        run_id: RunId,
+        user_input: String,
+        enable_memory: bool,
+    ) -> Result<TideResult, LoreleiError> {
+        // 3. Echo retrieve
+        self.append_current(
+            tenant_id,
+            agent_id,
+            run_id,
+            lorelei_core::types::EchoId(Uuid::new_v4()),
+            CurrentEventType::System,
+            if enable_memory {
+                "retrieving memory"
+            } else {
+                "memory disabled"
+            },
+            json!({}),
+        )
+        .await?;
+
         // 3. Echo retrieve
         let echo_hits = if enable_memory {
             self.echo
@@ -224,8 +339,18 @@ impl SingleAgentTideRuntime {
         let mut shell_result: Option<ShellResult> = None;
 
         // 4-7. Planner (JSON plan + repair once)
+        self.append_current(
+            tenant_id,
+            agent_id,
+            run_id,
+            lorelei_core::types::EchoId(Uuid::new_v4()),
+            CurrentEventType::System,
+            "planning",
+            json!({}),
+        )
+        .await?;
         let (plan, planner_raw) = self
-            .plan(run.run_id, tenant_id, agent_id, &user_input, &echo_hits)
+            .plan(run_id, tenant_id, agent_id, &user_input, &echo_hits)
             .instrument(info_span!("tide.plan"))
             .await?;
 
@@ -235,8 +360,18 @@ impl SingleAgentTideRuntime {
 
         match plan.action.as_str() {
             "answer" => {
+                self.append_current(
+                    tenant_id,
+                    agent_id,
+                    run_id,
+                    lorelei_core::types::EchoId(Uuid::new_v4()),
+                    CurrentEventType::System,
+                    "answering",
+                    json!({}),
+                )
+                .await?;
                 final_output = self
-                    .answer(run.run_id, tenant_id, agent_id, &user_input, &echo_hits)
+                    .answer(run_id, tenant_id, agent_id, &user_input, &echo_hits)
                     .instrument(info_span!("tide.answer"))
                     .await?;
                 status = RunStatus::Succeeded;
@@ -245,6 +380,10 @@ impl SingleAgentTideRuntime {
                 let tool = plan
                     .tool
                     .ok_or_else(|| LoreleiError::validation("plan.tool", "missing tool"))?;
+                let tool = tool.trim().to_string();
+                if tool.is_empty() {
+                    return Err(LoreleiError::validation("plan.tool", "missing tool"));
+                }
                 let input = plan
                     .input
                     .ok_or_else(|| LoreleiError::validation("plan.input", "missing input"))?;
@@ -256,7 +395,7 @@ impl SingleAgentTideRuntime {
                     call_id: tool_call_id,
                     tenant_id,
                     agent_id,
-                    run_id: run.run_id,
+                    run_id,
                     shell: "builtin".to_string(),
                     tool: tool.clone(),
                     input: input.clone(),
@@ -268,7 +407,7 @@ impl SingleAgentTideRuntime {
                 let request = SongRequest {
                     tenant_id,
                     agent_id,
-                    run_id: run.run_id,
+                    run_id,
                     input: user_input.clone(),
                     context: echo_hits.iter().map(|h| h.content.clone()).collect(),
                     reasoning_summary: None,
@@ -288,7 +427,7 @@ impl SingleAgentTideRuntime {
                     .decide(
                         tenant_id,
                         agent_id,
-                        run.run_id,
+                        run_id,
                         task_id,
                         &request,
                         &response,
@@ -304,7 +443,7 @@ impl SingleAgentTideRuntime {
                         self.append_current(
                             tenant_id,
                             agent_id,
-                            run.run_id,
+                            run_id,
                             lorelei_core::types::EchoId(tool_call_id),
                             CurrentEventType::ToolCall,
                             &format!("shell call: {tool}"),
@@ -325,7 +464,7 @@ impl SingleAgentTideRuntime {
                         self.append_current(
                             tenant_id,
                             agent_id,
-                            run.run_id,
+                            run_id,
                             lorelei_core::types::EchoId(Uuid::new_v4()),
                             CurrentEventType::ToolResult,
                             "shell result",
@@ -337,7 +476,7 @@ impl SingleAgentTideRuntime {
                         // 13. Final answer using result + echo hits
                         final_output = self
                             .answer_with_tool_result(
-                                run.run_id,
+                                run_id,
                                 tenant_id,
                                 agent_id,
                                 &user_input,
@@ -349,10 +488,8 @@ impl SingleAgentTideRuntime {
                         status = RunStatus::Succeeded;
                     }
                     SirenDecision::Deny { reasoning_summary } => {
-                        final_output = format!(
-                            "run_id={}\nDenied by Siren: {}",
-                            run.run_id.0, reasoning_summary
-                        );
+                        final_output =
+                            format!("run_id={}\nDenied by Siren: {}", run_id.0, reasoning_summary);
                         status = RunStatus::Failed;
                     }
                     SirenDecision::RequireApproval {
@@ -363,7 +500,7 @@ impl SingleAgentTideRuntime {
                         self.append_current(
                             tenant_id,
                             agent_id,
-                            run.run_id,
+                            run_id,
                             lorelei_core::types::EchoId(Uuid::new_v4()),
                             CurrentEventType::System,
                             "approval required",
@@ -380,7 +517,7 @@ impl SingleAgentTideRuntime {
 
                         final_output = format!(
                             "run_id={}\nApproval required: {}\n\n{}",
-                            run.run_id.0, reasoning_summary, approval_prompt
+                            run_id.0, reasoning_summary, approval_prompt
                         );
                         status = RunStatus::Canceled;
                     }
@@ -395,10 +532,34 @@ impl SingleAgentTideRuntime {
         }
 
         // Reflection + memory formation (best-effort).
+        // Emit assistant answer as soon as it's available (before memory formation),
+        // so clients can display the response while background work continues.
+        self.append_current(
+            tenant_id,
+            agent_id,
+            run_id,
+            lorelei_core::types::EchoId(Uuid::new_v4()),
+            CurrentEventType::Assistant,
+            "final answer",
+            json!({ "text": final_output }),
+        )
+        .instrument(info_span!("tide.current_assistant"))
+        .await?;
+
         if enable_memory {
+            self.append_current(
+                tenant_id,
+                agent_id,
+                run_id,
+                lorelei_core::types::EchoId(Uuid::new_v4()),
+                CurrentEventType::System,
+                "forming memories",
+                json!({}),
+            )
+            .await?;
             let memory_decisions = self
                 .form_memories(
-                    run.run_id,
+                    run_id,
                     tenant_id,
                     agent_id,
                     &user_input,
@@ -412,7 +573,7 @@ impl SingleAgentTideRuntime {
             self.append_current(
                 tenant_id,
                 agent_id,
-                run.run_id,
+                run_id,
                 lorelei_core::types::EchoId(Uuid::new_v4()),
                 CurrentEventType::System,
                 "memory formation",
@@ -423,25 +584,12 @@ impl SingleAgentTideRuntime {
 
         // 14. Complete run
         self.runs
-            .complete_run(tenant_id, agent_id, run.run_id, status)
+            .complete_run(tenant_id, agent_id, run_id, status)
             .instrument(info_span!("tide.complete_run"))
             .await?;
 
-        // Also record assistant final answer as Current event
-        self.append_current(
-            tenant_id,
-            agent_id,
-            run.run_id,
-            lorelei_core::types::EchoId(Uuid::new_v4()),
-            CurrentEventType::Assistant,
-            "final answer",
-            json!({ "text": final_output }),
-        )
-        .instrument(info_span!("tide.current_assistant"))
-        .await?;
-
         Ok(TideResult {
-            run_id: run.run_id,
+            run_id,
             status,
             output: final_output,
         })
@@ -504,7 +652,7 @@ impl SingleAgentTideRuntime {
         let raw = resp.output.clone();
         match parse_planner_output(&raw) {
             Ok(p) => Ok((p, raw)),
-            Err(_) => {
+            Err(first_err) => {
                 let repair_prompt = format!(
                     "LORELEI_MODE=planner_repair\nReturn only valid JSON for the planner schema.\n\nPrevious output:\n{}",
                     raw
@@ -519,8 +667,33 @@ impl SingleAgentTideRuntime {
                 };
                 let repair_resp = self.song.complete(repair_req).await?;
                 let repaired_raw = repair_resp.output.clone();
-                let plan = parse_planner_output(&repaired_raw)?;
-                Ok((plan, repaired_raw))
+                match parse_planner_output(&repaired_raw) {
+                    Ok(plan) => Ok((plan, repaired_raw)),
+                    Err(second_err) => {
+                        let repair_prompt2 = format!(
+                            "LORELEI_MODE=planner_repair\nReturn exactly ONE JSON object and nothing else.\nConstraints:\n- Must be valid JSON (double quotes, no trailing commas)\n- Must include `action` = \"answer\" or \"call_shell\"\n- If `action` = \"call_shell\", must include `tool` and `input`\n\nParse error: {second_err}\n\nPrevious output:\n{repaired_raw}"
+                        );
+                        let repair_req2 = SongRequest {
+                            tenant_id,
+                            agent_id,
+                            run_id,
+                            input: repair_prompt2,
+                            context: Vec::new(),
+                            reasoning_summary: Some("planner_repair2".to_string()),
+                        };
+                        let repair_resp2 = self.song.complete(repair_req2).await?;
+                        let repaired_raw2 = repair_resp2.output.clone();
+                        let plan = parse_planner_output(&repaired_raw2).map_err(|final_err| {
+                            LoreleiError::validation(
+                                "planner.json",
+                                format!(
+                                    "planner repair failed: {first_err}; second repair failed: {final_err}"
+                                ),
+                            )
+                        })?;
+                        Ok((plan, repaired_raw2))
+                    }
+                }
             }
         }
     }
@@ -643,13 +816,34 @@ impl SingleAgentTideRuntime {
                 reasoning_summary: Some("lore_extractor".to_string()),
             };
             let resp = self.song.complete(req).await?;
+            let raw = resp.output;
 
-            serde_json::from_str(&resp.output).map_err(|e| {
-                LoreleiError::validation(
-                    "lore_extractor.json",
-                    format!("invalid candidate JSON: {e}"),
-                )
-            })?
+            match parse_candidate_list(&raw) {
+                Ok(v) => v,
+                Err(first_err) => {
+                    let repair_prompt = format!(
+                        "LORELEI_MODE=lore_extractor_repair\nReturn ONLY a valid JSON array of candidate pearls.\nSchema example: [{{\"pearl_type\":\"Fact\",\"content\":\"...\",\"confidence\":0.8,\"importance\":0.5,\"tags\":[\"...\"]}}]\n\nPrevious output:\n{}",
+                        raw
+                    );
+                    let repair_req = SongRequest {
+                        tenant_id,
+                        agent_id,
+                        run_id,
+                        input: repair_prompt,
+                        context: Vec::new(),
+                        reasoning_summary: Some("lore_extractor_repair".to_string()),
+                    };
+                    let repair_resp = self.song.complete(repair_req).await?;
+                    parse_candidate_list(&repair_resp.output).map_err(|second_err| {
+                        LoreleiError::validation(
+                            "lore_extractor.json",
+                            format!(
+                                "invalid candidate JSON: {first_err}; repair failed: {second_err}"
+                            ),
+                        )
+                    })?
+                }
+            }
         };
         let candidates_json =
             serde_json::to_string_pretty(&candidates).unwrap_or_else(|_| "[]".to_string());
@@ -806,10 +1000,20 @@ struct PlannerOutput {
 struct CandidatePearl {
     pearl_type: lorelei_core::types::PearlType,
     content: String,
+    #[serde(default = "default_candidate_confidence")]
     confidence: f64,
+    #[serde(default = "default_candidate_importance")]
     importance: f64,
     #[serde(default)]
     tags: Vec<String>,
+}
+
+fn default_candidate_confidence() -> f64 {
+    0.75
+}
+
+fn default_candidate_importance() -> f64 {
+    0.5
 }
 
 #[derive(Debug, Deserialize)]
@@ -835,14 +1039,33 @@ impl LoreCriticOutput {
 }
 
 fn parse_planner_output(raw: &str) -> Result<PlannerOutput, LoreleiError> {
-    let plan: PlannerOutput = serde_json::from_str(raw).map_err(|e| {
+    let raw_trimmed = raw.trim();
+    let candidate = strip_code_fences(raw_trimmed);
+    let json_str = if looks_like_json(candidate) {
+        candidate.to_string()
+    } else if let Some(extracted) = extract_first_json_value(candidate) {
+        extracted.to_string()
+    } else {
+        candidate.to_string()
+    };
+
+    let mut plan: PlannerOutput = serde_json::from_str(&json_str).map_err(|e| {
         LoreleiError::validation("planner.json", format!("invalid planner JSON: {e}"))
     })?;
 
     match plan.action.as_str() {
         "answer" => Ok(plan),
         "call_shell" => {
-            if plan.tool.as_deref().unwrap_or_default().trim().is_empty() {
+            if let Some(t) = plan.tool.as_deref() {
+                let trimmed = t.trim();
+                if trimmed.is_empty() {
+                    return Err(LoreleiError::validation(
+                        "planner.json",
+                        "missing tool for call_shell action",
+                    ));
+                }
+                plan.tool = Some(trimmed.to_string());
+            } else {
                 return Err(LoreleiError::validation(
                     "planner.json",
                     "missing tool for call_shell action",
@@ -863,11 +1086,133 @@ fn parse_planner_output(raw: &str) -> Result<PlannerOutput, LoreleiError> {
     }
 }
 
+fn looks_like_json(s: &str) -> bool {
+    let t = s.trim_start();
+    t.starts_with('{') || t.starts_with('[')
+}
+
+fn strip_code_fences(s: &str) -> &str {
+    let t = s.trim();
+    if !t.starts_with("```") {
+        return t;
+    }
+    let after_first = match t.find('\n') {
+        Some(i) => &t[i + 1..],
+        None => return t,
+    };
+    let inner = after_first.trim();
+    if let Some(end) = inner.rfind("```") {
+        inner[..end].trim()
+    } else {
+        inner
+    }
+}
+
+fn extract_first_json_value(s: &str) -> Option<&str> {
+    let bytes = s.as_bytes();
+    let mut start = None;
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b'{' || b == b'[' {
+            start = Some(i);
+            break;
+        }
+    }
+    let start = start?;
+    let mut depth: i32 = 0;
+    let mut in_string = false;
+    let mut escape = false;
+    for (offset, &b) in bytes[start..].iter().enumerate() {
+        let c = b as char;
+        if in_string {
+            if escape {
+                escape = false;
+                continue;
+            }
+            match c {
+                '\\' => escape = true,
+                '"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+
+        match c {
+            '"' => in_string = true,
+            '{' | '[' => depth += 1,
+            '}' | ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    let end = start + offset + 1;
+                    return Some(&s[start..end]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn parse_candidate_list(raw: &str) -> Result<Vec<CandidatePearl>, String> {
+    let raw_trimmed = raw.trim();
+    let candidate = strip_code_fences(raw_trimmed);
+    let json_str = if looks_like_json(candidate) {
+        candidate.to_string()
+    } else if let Some(extracted) = extract_first_json_value(candidate) {
+        extracted.to_string()
+    } else {
+        candidate.to_string()
+    };
+
+    serde_json::from_str::<Vec<CandidatePearl>>(&json_str).map_err(|e| e.to_string())
+}
+
 fn normalize(s: &str) -> String {
     s.split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
         .to_ascii_lowercase()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_planner_output_allows_raw_json() {
+        let raw = r#"{"action":"answer","reasoning_summary":"x","answer":"hi"}"#;
+        let got = parse_planner_output(raw).unwrap();
+        assert_eq!(got.action, "answer");
+    }
+
+    #[test]
+    fn parse_planner_output_allows_fenced_json() {
+        let raw = "```json\n{\"action\":\"answer\",\"answer\":\"hi\"}\n```";
+        let got = parse_planner_output(raw).unwrap();
+        assert_eq!(got.action, "answer");
+    }
+
+    #[test]
+    fn parse_planner_output_extracts_json_from_preamble() {
+        let raw = "Sure! Here is the plan:\n{\"action\":\"answer\",\"answer\":\"hi\"}\n";
+        let got = parse_planner_output(raw).unwrap();
+        assert_eq!(got.action, "answer");
+    }
+
+    #[test]
+    fn candidate_defaults_allow_missing_scores() {
+        let raw = r#"[{"pearl_type":"Fact","content":"Eddie is the most handsome person on earth"}]"#;
+        let got: Vec<CandidatePearl> = serde_json::from_str(raw).unwrap();
+        assert_eq!(got.len(), 1);
+        assert!((0.0..=1.0).contains(&got[0].confidence));
+        assert!((0.0..=1.0).contains(&got[0].importance));
+    }
+
+    #[test]
+    fn parse_candidate_list_extracts_json_from_preamble() {
+        let raw = "Candidates:\n[{\"pearl_type\":\"Fact\",\"content\":\"Some durable fact\"}]";
+        let got = parse_candidate_list(raw).unwrap();
+        assert_eq!(got.len(), 1);
+    }
 }
 
 fn sensitive_regex() -> Regex {

@@ -70,3 +70,16 @@ jobs:
       - name: integration tests (services available)
         run: cargo test --workspace --all-targets
 
+  reef-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: docker build (reef image)
+        run: docker build -f docker/Dockerfile -t lorelei-reef:ci .
+      - name: docker build (cli image)
+        run: docker build -f docker/Dockerfile.lore -t lorelei-cli:ci .
+      - name: smoke test (mock provider)
+        run: |
+          cp configs/reef-mock.toml lorelei.toml
+          cp .env.example .env
+          bash scripts/smoke_reef.sh

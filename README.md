@@ -25,6 +25,11 @@ Lorelei uses nautical metaphors as a shared design language:
 - `docs/TESTING.md` — testing strategy (unit/integration/security).
 - `docs/SECURITY_MODEL.md` — threat model and safety constraints.
 
+## Documents (More)
+- `docs/QUICKSTART.md` — run The Reef locally.
+- `docs/PROVIDERS.md` — provider config examples (Mock/OpenAI/Ollama).
+- `docs/TROUBLESHOOTING.md` — common issues + fixes.
+
 ## Branding
 - Project name: **Lorelei**
 - Tagline: **“Lorelei: Deep Memory, Iron Safety.”**
@@ -34,4 +39,3 @@ Lorelei uses nautical metaphors as a shared design language:
 
 ## License
 TBD.
-

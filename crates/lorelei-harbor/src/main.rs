@@ -10,6 +10,7 @@ struct Args {
 #[derive(Debug, Subcommand)]
 enum Cmd {
     Serve,
+    Migrate,
     Worker {
         #[arg(long, default_value_t = 5)]
         poll_seconds: u64,
@@ -28,6 +29,7 @@ async fn main() {
 
     let res = match args.cmd.unwrap_or(Cmd::Serve) {
         Cmd::Serve => lorelei_harbor::http::server::serve().await,
+        Cmd::Migrate => lorelei_harbor::http::server::migrate().await,
         Cmd::Worker {
             poll_seconds,
             lease_seconds,

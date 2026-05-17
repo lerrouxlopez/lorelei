@@ -52,7 +52,11 @@ impl DeterministicSirenPolicy {
     }
 
     fn extract_tool_names(tool_calls: &[NormalizedToolCall]) -> Vec<String> {
-        tool_calls.iter().map(|t| t.name.clone()).collect()
+        tool_calls
+            .iter()
+            .map(|t| t.name.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
     }
 
     fn medium_risk_tools(&self) -> &'static [&'static str] {
@@ -125,7 +129,12 @@ impl DeterministicSirenPolicy {
         }
 
         let mut requested_tools = Self::extract_tool_names(tool_calls);
-        requested_tools.extend(shell_names.iter().cloned());
+        requested_tools.extend(
+            shell_names
+                .iter()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
+        );
         requested_tools.sort();
         requested_tools.dedup();
 

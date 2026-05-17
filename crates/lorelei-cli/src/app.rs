@@ -299,6 +299,8 @@ struct CreateRunRequest {
     tenant_id: Uuid,
     agent_id: Uuid,
     input: String,
+    #[serde(rename = "async", skip_serializing_if = "Option::is_none")]
+    async_run: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     no_memory: Option<bool>,
 }
@@ -364,22 +366,91 @@ async fn cmd_ask(args: AskArgs) -> Result<(), String> {
     let harbor_url = HarborClient::default_base_url(args.harbor.harbor_url);
     let harbor = HarborClient::new(harbor_url)?;
 
+    let tenant_id = cfg.agent.tenant_id.0;
+    let agent_id = cfg.agent.agent_id.0;
+
     let created: RunResponse = harbor
         .post_json(
             "/v1/runs",
             &CreateRunRequest {
-                tenant_id: cfg.agent.tenant_id.0,
-                agent_id: cfg.agent.agent_id.0,
+                tenant_id,
+                agent_id,
                 input: args.prompt,
+                async_run: if args.progress { Some(true) } else { None },
                 no_memory: if args.no_memory { Some(true) } else { None },
             },
         )
         .await
         .map_err(|e| e.to_string())?;
 
-    let output = created.output.unwrap_or_default();
-    println!("{output}");
+    if !args.progress {
+        let output = created.output.unwrap_or_default();
+        println!("{output}");
+        return Ok(());
+    }
+
+    println!("run_id={}", created.run_id);
+
+    let mut last_event_count: usize = 0;
+    let mut printed_final_answer = false;
+    loop {
+        let run_path = format!(
+            "/v1/runs/{}?tenant_id={}&agent_id={}",
+            created.run_id, tenant_id, agent_id
+        );
+        let run: RunInspectResponse =
+            harbor.get_json(&run_path).await.map_err(|e| e.to_string())?;
+
+        let currents_path = format!(
+            "/v1/runs/{}/currents?tenant_id={}&agent_id={}",
+            created.run_id, tenant_id, agent_id
+        );
+        let events: Vec<CurrentEventResponse> =
+            harbor.get_json(&currents_path).await.map_err(|e| e.to_string())?;
+
+        if events.len() > last_event_count {
+            for e in events.iter().skip(last_event_count) {
+                match e.event_type {
+                    lorelei_core::types::CurrentEventType::Assistant if e.summary == "final answer" => {
+                        if let Some(t) = e.data.get("text").and_then(|v| v.as_str()) {
+                            println!("{t}");
+                            printed_final_answer = true;
+                        } else {
+                            println!("{}", dim_grey(&format!("{}\t{:?}\t{}", e.created_at, e.event_type, e.summary)));
+                        }
+                    }
+                    lorelei_core::types::CurrentEventType::System => {
+                        // "Thinking" progress: keep it subtle so the user knows we're working.
+                        println!("{}", dim_grey(&format!("· {}", e.summary)));
+                    }
+                    lorelei_core::types::CurrentEventType::User => {
+                        println!("{}", dim_grey(&format!("> {}", e.summary)));
+                    }
+                    _ => println!("{}", dim_grey(&format!("{}\t{:?}\t{}", e.created_at, e.event_type, e.summary))),
+                }
+            }
+            last_event_count = events.len();
+        }
+
+        if printed_final_answer {
+            // Return control to the user as soon as the answer is available.
+            // Memory formation and indexing continue server-side.
+            break;
+        }
+
+        if run.status != lorelei_core::types::RunStatus::Running {
+            break;
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
     Ok(())
+}
+
+fn dim_grey(s: &str) -> String {
+    // Bright black (90) + dim (2). Resets at end.
+    // If the terminal doesn't support ANSI, this will display raw codes; users can set `--progress false`.
+    format!("\x1b[2;90m{s}\x1b[0m")
 }
 
 async fn cmd_pearls(args: PearlsArgs) -> Result<(), String> {

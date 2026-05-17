@@ -224,6 +224,9 @@ pub struct AskArgs {
     /// Disable memory retrieval (Echo)
     #[arg(long)]
     pub no_memory: bool,
+    /// Print live progress while Harbor runs the Tide loop
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    pub progress: bool,
     /// User prompt
     pub prompt: String,
 }
