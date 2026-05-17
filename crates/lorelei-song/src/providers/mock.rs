@@ -30,6 +30,35 @@ impl MockSongProvider {
 
     fn deterministic_text_response(input: &str) -> String {
         if input.contains("LORELEI_MODE=planner_json") {
+            // Special test hook: allow acceptance scripts to force a shell call without a real LLM.
+            // Format in user prompt:
+            //   LORELEI_TEST_CALL_SHELL=<tool> [pearl_id=<uuid>]
+            if let Some(idx) = input.find("LORELEI_TEST_CALL_SHELL=") {
+                let rest = &input[idx + "LORELEI_TEST_CALL_SHELL=".len()..];
+                let tool = rest
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("noop")
+                    .trim()
+                    .to_string();
+
+                if tool == "forget_pearl" {
+                    let pearl_id = rest
+                        .split_whitespace()
+                        .find_map(|t| t.strip_prefix("pearl_id="))
+                        .unwrap_or("00000000-0000-0000-0000-000000000000");
+                    return format!(
+                        r#"{{"action":"call_shell","reasoning_summary":"mock tool call","tool":"forget_pearl","input":{{"pearl_id":"{}"}}}}"#,
+                        pearl_id
+                    );
+                }
+
+                return format!(
+                    r#"{{"action":"call_shell","reasoning_summary":"mock tool call","tool":"{}","input":{{}}}}"#,
+                    tool
+                );
+            }
+
             return r#"{"action":"answer","reasoning_summary":"mock plan","answer":"hello from planner"}"#.to_string();
         }
         if input.contains("LORELEI_MODE=planner_json_invalid_once") {
@@ -40,6 +69,21 @@ impl MockSongProvider {
             return r#"{"action":"answer","reasoning_summary":"repaired","answer":"hello from repaired planner"}"#.to_string();
         }
         if input.contains("LORELEI_MODE=answer") {
+            // Deterministic “memory-aware” answer for acceptance tests:
+            // if the prompt contains EchoHits, repeat the first item.
+            if let Some(mem_idx) = input.find("Memory (EchoHits):") {
+                let after = &input[mem_idx..];
+                for line in after.lines() {
+                    let l = line.trim_start();
+                    if let Some(rest) = l.strip_prefix("- ") {
+                        // "- <content> (<type>)"
+                        let content = rest.split(" (").next().unwrap_or(rest).trim();
+                        if !content.is_empty() && content != "{{ECHO_HITS}}" {
+                            return format!("Using memory: {content}");
+                        }
+                    }
+                }
+            }
             return "Say hello from The Song.".to_string();
         }
         if input.contains("memory extractor") || input.contains("candidate Pearls") {
