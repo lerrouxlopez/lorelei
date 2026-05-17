@@ -1,5 +1,5 @@
 use lorelei_core::traits::{EchoRetriever, LoreStore};
-use lorelei_core::types::{AgentId, EchoQuery, NewPearl, PearlType, TenantId, UnitInterval};
+use lorelei_core::types::{AgentId, EchoQuery, EchoSources, NewPearl, PearlType, TenantId, UnitInterval};
 use lorelei_echo::retriever::{EchoEngine, EchoRetrievalConfig};
 use lorelei_lore::embedding::{DeterministicMockEmbeddingProvider, EmbeddingProvider};
 use lorelei_lore::pg::PgLoreStore;
@@ -88,6 +88,7 @@ async fn echo_retrieves_relevant_pearls_and_dedupes() {
                 top_k: 10,
                 min_confidence: Some(UnitInterval::new(0.0).unwrap()),
                 pearl_type: None,
+                sources: EchoSources::Pearls,
             },
         )
         .await
@@ -145,6 +146,7 @@ async fn echo_excludes_low_confidence_and_never_crosses_tenants() {
                 top_k: 10,
                 min_confidence: Some(UnitInterval::new(0.5).unwrap()),
                 pearl_type: None,
+                sources: EchoSources::Pearls,
             },
         )
         .await
@@ -161,6 +163,7 @@ async fn echo_excludes_low_confidence_and_never_crosses_tenants() {
                 top_k: 10,
                 min_confidence: Some(UnitInterval::new(0.5).unwrap()),
                 pearl_type: None,
+                sources: EchoSources::Pearls,
             },
         )
         .await
@@ -203,6 +206,7 @@ async fn echo_handles_zero_results_gracefully() {
                 top_k: 5,
                 min_confidence: None,
                 pearl_type: None,
+                sources: EchoSources::Pearls,
             },
         )
         .await

@@ -56,7 +56,7 @@ impl DeterministicSirenPolicy {
     }
 
     fn medium_risk_tools(&self) -> &'static [&'static str] {
-        &["http_get", "save_pearl"]
+        &["http_get", "save_pearl", "document_ingest"]
     }
 
     fn high_risk_tools(&self) -> &'static [&'static str] {
@@ -83,7 +83,10 @@ impl DeterministicSirenPolicy {
     }
 
     fn is_readonly_low_risk(tool: &str) -> bool {
-        matches!(tool, "noop" | "echo" | "echo_lore" | "list_pearls")
+        matches!(
+            tool,
+            "noop" | "echo" | "echo_lore" | "list_pearls" | "document_search"
+        )
     }
 
     fn requires_clear_user_intent(&self, request: &SongRequest, tool: &str) -> bool {

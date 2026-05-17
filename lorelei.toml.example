@@ -29,6 +29,11 @@ require_approval_for_high_risk = true
 allow_shell_execution = false
 allow_network_tools = false
 
+[docs]
+# Local directories allowed for document ingestion (text/markdown only).
+# If empty, document ingestion is disabled.
+allowed_dirs = ["./docs", "./prompts"]
+
 [providers.mock]
 kind = "mock"
 base_url = "http://127.0.0.1:0"

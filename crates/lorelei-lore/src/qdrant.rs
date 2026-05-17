@@ -20,6 +20,10 @@ pub struct QdrantPearlIndex {
 pub struct VectorHit {
     pub pearl_id: PearlId,
     pub score: f32,
+    pub source_type: Option<String>,
+    pub document_id: Option<Uuid>,
+    pub chunk_index: Option<i32>,
+    pub title: Option<String>,
 }
 
 impl QdrantPearlIndex {
@@ -47,8 +51,39 @@ impl QdrantPearlIndex {
         pearl: &Pearl,
         vector: Vec<f32>,
     ) -> Result<(), LoreleiError> {
-        let payload = pearl_payload(pearl);
+        let mut payload = pearl_payload(pearl);
+        payload.insert("source_type".to_string(), "pearl".into());
         let point = PointStruct::new(pearl_id_to_point_id(pearl.pearl_id), vector, payload);
+        self.client
+            .upsert_points(UpsertPointsBuilder::new(
+                self.collection.clone(),
+                vec![point],
+            ))
+            .await
+            .map_err(|e| LoreleiError::Internal(format!("qdrant upsert failed: {e}")))?;
+        Ok(())
+    }
+
+    pub async fn upsert_document_chunk_vector(
+        &self,
+        tenant_id: TenantId,
+        agent_id: AgentId,
+        document_id: Uuid,
+        chunk_id: Uuid,
+        chunk_index: i32,
+        title: &str,
+        vector: Vec<f32>,
+    ) -> Result<(), LoreleiError> {
+        let mut payload: HashMap<String, qdrant_client::qdrant::Value> = HashMap::new();
+        payload.insert("source_type".to_string(), "document_chunk".into());
+        payload.insert("pearl_id".to_string(), chunk_id.to_string().into());
+        payload.insert("tenant_id".to_string(), tenant_id.0.to_string().into());
+        payload.insert("agent_id".to_string(), agent_id.0.to_string().into());
+        payload.insert("document_id".to_string(), document_id.to_string().into());
+        payload.insert("chunk_index".to_string(), chunk_index.into());
+        payload.insert("title".to_string(), title.to_string().into());
+
+        let point = PointStruct::new(PointId::from(chunk_id), vector, payload);
         self.client
             .upsert_points(UpsertPointsBuilder::new(
                 self.collection.clone(),
@@ -66,7 +101,7 @@ impl QdrantPearlIndex {
         top_k: u64,
         agent_id: Option<AgentId>,
     ) -> Result<Vec<VectorHit>, LoreleiError> {
-        let filter = tenant_filter(tenant_id, agent_id);
+        let filter = tenant_filter_with_source(tenant_id, agent_id, "pearl");
         let res = self
             .client
             .search_points(
@@ -84,6 +119,64 @@ impl QdrantPearlIndex {
             out.push(VectorHit {
                 pearl_id,
                 score: p.score,
+                source_type: p
+                    .payload
+                    .get("source_type")
+                    .and_then(|v| v.as_str().map(|s| s.to_string())),
+                document_id: p
+                    .payload
+                    .get("document_id")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| Uuid::parse_str(s).ok()),
+                chunk_index: p.payload.get("chunk_index").and_then(|v| v.as_integer()).map(|i| i as i32),
+                title: p
+                    .payload
+                    .get("title")
+                    .and_then(|v| v.as_str().map(|s| s.to_string())),
+            });
+        }
+        Ok(out)
+    }
+
+    pub async fn search_document_chunk_vectors(
+        &self,
+        tenant_id: TenantId,
+        query_vector: Vec<f32>,
+        top_k: u64,
+        agent_id: Option<AgentId>,
+    ) -> Result<Vec<VectorHit>, LoreleiError> {
+        let filter = tenant_filter_with_source(tenant_id, agent_id, "document_chunk");
+        let res = self
+            .client
+            .search_points(
+                SearchPointsBuilder::new(self.collection.clone(), query_vector, top_k)
+                    .with_payload(true)
+                    .filter(filter),
+            )
+            .await
+            .map_err(|e| LoreleiError::Internal(format!("qdrant search failed: {e}")))?;
+
+        let mut out = Vec::with_capacity(res.result.len());
+        for p in res.result {
+            let Some(id) = p.id else { continue };
+            let chunk_id = point_id_to_pearl_id(id)?;
+            out.push(VectorHit {
+                pearl_id: chunk_id,
+                score: p.score,
+                source_type: p
+                    .payload
+                    .get("source_type")
+                    .and_then(|v| v.as_str().map(|s| s.to_string())),
+                document_id: p
+                    .payload
+                    .get("document_id")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| Uuid::parse_str(s).ok()),
+                chunk_index: p.payload.get("chunk_index").and_then(|v| v.as_integer()).map(|i| i as i32),
+                title: p
+                    .payload
+                    .get("title")
+                    .and_then(|v| v.as_str().map(|s| s.to_string())),
             });
         }
         Ok(out)
@@ -98,8 +191,26 @@ impl QdrantPearlIndex {
         let filter = Filter::must([
             qdrant_client::qdrant::Condition::matches("tenant_id", tenant_id.0.to_string()),
             qdrant_client::qdrant::Condition::matches("pearl_id", pearl_id.0.to_string()),
+            qdrant_client::qdrant::Condition::matches("source_type", "pearl".to_string()),
         ]);
 
+        self.client
+            .delete_points(DeletePointsBuilder::new(self.collection.clone()).points(filter))
+            .await
+            .map_err(|e| LoreleiError::Internal(format!("qdrant delete failed: {e}")))?;
+        Ok(())
+    }
+
+    pub async fn delete_document_vectors(
+        &self,
+        tenant_id: TenantId,
+        document_id: Uuid,
+    ) -> Result<(), LoreleiError> {
+        let filter = Filter::must([
+            qdrant_client::qdrant::Condition::matches("tenant_id", tenant_id.0.to_string()),
+            qdrant_client::qdrant::Condition::matches("document_id", document_id.to_string()),
+            qdrant_client::qdrant::Condition::matches("source_type", "document_chunk".to_string()),
+        ]);
         self.client
             .delete_points(DeletePointsBuilder::new(self.collection.clone()).points(filter))
             .await
@@ -119,6 +230,21 @@ fn tenant_filter(tenant_id: TenantId, agent_id: Option<AgentId>) -> Filter {
             "tenant_id",
             tenant_id.0.to_string(),
         )])
+    }
+}
+
+fn tenant_filter_with_source(tenant_id: TenantId, agent_id: Option<AgentId>, source: &str) -> Filter {
+    if let Some(agent) = agent_id {
+        Filter::must([
+            qdrant_client::qdrant::Condition::matches("tenant_id", tenant_id.0.to_string()),
+            qdrant_client::qdrant::Condition::matches("agent_id", agent.0.to_string()),
+            qdrant_client::qdrant::Condition::matches("source_type", source.to_string()),
+        ])
+    } else {
+        Filter::must([
+            qdrant_client::qdrant::Condition::matches("tenant_id", tenant_id.0.to_string()),
+            qdrant_client::qdrant::Condition::matches("source_type", source.to_string()),
+        ])
     }
 }
 

@@ -10,3 +10,4 @@ pub mod echo;
 pub mod embedding;
 pub mod pg;
 pub mod qdrant;
+pub mod docs;

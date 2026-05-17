@@ -65,6 +65,15 @@ pub struct SirenConfig {
     pub allow_network_tools: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct DocsConfig {
+    /// Directories allowed for local document ingestion.
+    ///
+    /// If empty, document ingestion is disabled.
+    #[serde(default)]
+    pub allowed_dirs: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LoreleiConfig {
     pub agent: AgentConfig,
@@ -72,6 +81,8 @@ pub struct LoreleiConfig {
     pub lore: LoreConfig,
     pub echo: EchoConfig,
     pub siren: SirenConfig,
+    #[serde(default)]
+    pub docs: DocsConfig,
     pub providers: BTreeMap<String, ProviderConfig>,
 }
 
@@ -147,6 +158,15 @@ impl LoreleiConfig {
                 "echo.rerank_top_k",
                 "must be <= echo.top_k",
             ));
+        }
+
+        for d in &self.docs.allowed_dirs {
+            if d.trim().is_empty() {
+                return Err(LoreleiError::validation(
+                    "docs.allowed_dirs",
+                    "must not contain empty entries",
+                ));
+            }
         }
 
         for (name, p) in &self.providers {

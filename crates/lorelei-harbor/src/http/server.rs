@@ -7,6 +7,7 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
+use axum::routing::delete;
 use axum::{Json, Router};
 use lorelei_core::config::LoreleiConfig;
 use lorelei_core::error::LoreleiError;
@@ -17,6 +18,7 @@ use lorelei_core::types::{
 };
 use lorelei_echo::retriever::{EchoEngine, EchoRetrievalConfig};
 use lorelei_lore::embedding::{DynSongProviderEmbeddingAdapter, EmbeddingProvider};
+use lorelei_lore::docs::PgDocumentStore;
 use lorelei_lore::pg::PgLoreStore;
 use lorelei_lore::qdrant::QdrantPearlIndex;
 use lorelei_shells::registry::BuiltinShellRegistry;
@@ -40,6 +42,7 @@ pub struct AppState {
     pub qdrant_index: QdrantPearlIndex,
     pub lore_store: Arc<dyn LoreStore>,
     pub echo: Arc<dyn EchoRetriever>,
+    pub documents: Arc<dyn lorelei_core::traits::DocumentStore>,
     pub providers: Arc<ProviderRegistry>,
     pub shells: Arc<BuiltinShellRegistry>,
     pub currents: Arc<PgCurrentStore>,
@@ -117,6 +120,8 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/pearls", post(create_pearl).get(list_pearls))
         .route("/v1/pearls/:pearl_id", get(get_pearl).delete(delete_pearl))
         .route("/v1/echo", post(echo))
+        .route("/v1/docs/ingest", post(docs_ingest))
+        .route("/v1/docs/:document_id", delete(docs_delete))
         .route("/v1/providers", get(list_providers))
         .route("/v1/shells", get(list_shells))
         .route("/v1/runs/:run_id/currents", get(list_currents))
@@ -190,7 +195,22 @@ pub async fn build_state() -> Result<AppState, LoreleiError> {
     );
 
     let lore_store: Arc<dyn LoreStore> = Arc::new(lore_store_indexed);
-    let echo: Arc<dyn EchoRetriever> = Arc::new(echo_engine);
+
+    let allowed_dirs = config
+        .docs
+        .allowed_dirs
+        .iter()
+        .map(std::path::PathBuf::from)
+        .collect::<Vec<_>>();
+    let documents: Arc<dyn lorelei_core::traits::DocumentStore> = Arc::new(PgDocumentStore::new(
+        pg_pool.clone(),
+        qdrant_index.clone(),
+        DynSongProviderEmbeddingAdapter::new(providers.get(&config.agent.default_embedding_provider)?),
+        config.agent.default_embedding_provider.clone(),
+        allowed_dirs,
+    ));
+
+    let echo: Arc<dyn EchoRetriever> = Arc::new(echo_engine.with_documents(documents.clone()));
 
     let shells_repo = Arc::new(PgShellCallRepository::new(pg_pool.clone()));
     let shells: Arc<BuiltinShellRegistry> = Arc::new(
@@ -198,6 +218,7 @@ pub async fn build_state() -> Result<AppState, LoreleiError> {
             config.clone(),
             lore_store.clone(),
             echo.clone(),
+            documents.clone(),
             shells_repo,
         )
         .with_current_id_provider(|call| Some(call.call_id)),
@@ -229,6 +250,7 @@ pub async fn build_state() -> Result<AppState, LoreleiError> {
         qdrant_index,
         lore_store,
         echo,
+        documents,
         providers,
         shells,
         currents,
@@ -468,6 +490,20 @@ pub struct EchoRequest {
     pub top_k: Option<usize>,
     pub min_confidence: Option<f64>,
     pub pearl_type: Option<PearlType>,
+    pub sources: Option<String>,
+}
+
+fn parse_sources(s: Option<String>) -> Result<lorelei_core::types::EchoSources, LoreleiError> {
+    let Some(s) = s else { return Ok(lorelei_core::types::EchoSources::Pearls) };
+    match s.trim().to_ascii_lowercase().as_str() {
+        "pearls" => Ok(lorelei_core::types::EchoSources::Pearls),
+        "documents" | "docs" => Ok(lorelei_core::types::EchoSources::Documents),
+        "all" => Ok(lorelei_core::types::EchoSources::All),
+        _ => Err(LoreleiError::validation(
+            "echo.sources",
+            "invalid sources (try: pearls|documents|all)",
+        )),
+    }
 }
 
 async fn echo(
@@ -492,12 +528,66 @@ async fn echo(
                 top_k: body.top_k.unwrap_or(state.config.echo.top_k),
                 min_confidence: min_conf,
                 pearl_type: body.pearl_type,
+                sources: parse_sources(body.sources).map_err(|e| map_err(e, request_id))?,
             },
         )
         .await
         .map_err(|e| map_err(e, request_id))?;
 
     Ok(Json(hits))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DocsIngestRequest {
+    pub tenant_id: Uuid,
+    pub agent_id: Uuid,
+    pub path: String,
+}
+
+async fn docs_ingest(
+    State(state): State<AppState>,
+    axum::extract::Extension(rid): axum::extract::Extension<RequestId>,
+    headers: HeaderMap,
+    Json(body): Json<DocsIngestRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let request_id = request_id_from_headers_or_ext(&headers, Some(&rid));
+    let doc_id = state
+        .documents
+        .ingest_document_path(
+            lorelei_core::types::TenantId(body.tenant_id),
+            lorelei_core::types::AgentId(body.agent_id),
+            std::path::Path::new(&body.path),
+        )
+        .await
+        .map_err(|e| map_err(e, request_id))?;
+    Ok((StatusCode::CREATED, Json(json!({ "document_id": doc_id }))))
+}
+
+async fn docs_delete(
+    State(state): State<AppState>,
+    axum::extract::Extension(rid): axum::extract::Extension<RequestId>,
+    headers: HeaderMap,
+    Path(document_id): Path<Uuid>,
+    Query(q): Query<std::collections::HashMap<String, String>>,
+) -> Result<impl IntoResponse, ApiError> {
+    let request_id = request_id_from_headers_or_ext(&headers, Some(&rid));
+    let tenant_id = q
+        .get("tenant_id")
+        .and_then(|s| Uuid::parse_str(s).ok())
+        .ok_or_else(|| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            code: "bad_request",
+            message: "tenant_id query param required".to_string(),
+            request_id,
+        })?;
+
+    state
+        .documents
+        .soft_delete_document(lorelei_core::types::TenantId(tenant_id), document_id)
+        .await
+        .map_err(|e| map_err(e, request_id))?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Debug, Serialize)]

@@ -45,6 +45,8 @@ pub enum Command {
     Ship(ShipArgs),
     /// Inspect runs and their artifacts (via Harbor)
     Run(RunArgs),
+    /// Document ingestion + search (via Harbor)
+    Docs(DocsArgs),
 }
 
 #[derive(Debug, Args)]
@@ -67,6 +69,34 @@ pub enum RunCommand {
 #[derive(Debug, Args)]
 pub struct RunIdArg {
     pub run_id: String,
+}
+
+#[derive(Debug, Args)]
+pub struct DocsArgs {
+    #[command(flatten)]
+    pub config: ConfigArgs,
+    #[command(flatten)]
+    pub harbor: HarborArgs,
+    #[command(subcommand)]
+    pub command: DocsCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DocsCommand {
+    Ingest(DocsIngestArgs),
+    Search(DocsSearchArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct DocsIngestArgs {
+    pub path: String,
+}
+
+#[derive(Debug, Args)]
+pub struct DocsSearchArgs {
+    pub query: String,
+    #[arg(long)]
+    pub top_k: Option<usize>,
 }
 
 #[derive(Debug, Args)]

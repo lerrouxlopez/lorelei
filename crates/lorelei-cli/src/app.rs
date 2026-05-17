@@ -117,6 +117,13 @@ pub async fn run(cli: Cli) -> i32 {
                 1
             }
         },
+        Command::Docs(args) => match cmd_docs(args).await {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("{e}");
+                1
+            }
+        },
     }
 }
 
@@ -743,6 +750,87 @@ async fn cmd_run(args: RunArgs) -> Result<(), String> {
                     "{}\t{:?}\t{}",
                     pearl.pearl_id, pearl.pearl_type, pearl.content
                 );
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+struct DocsIngestRequest {
+    tenant_id: Uuid,
+    agent_id: Uuid,
+    path: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct DocsIngestResponse {
+    document_id: Uuid,
+}
+
+async fn cmd_docs(args: DocsArgs) -> Result<(), String> {
+    let cfg = LoreleiConfig::load_from_toml_path(&args.config.config)
+        .map_err(|e| format!("config error: {e}"))?;
+    let harbor = HarborClient::new(HarborClient::default_base_url(args.harbor.harbor_url))?;
+
+    let tenant = cfg.agent.tenant_id.0;
+    let agent = cfg.agent.agent_id.0;
+
+    match args.command {
+        DocsCommand::Ingest(i) => {
+            let res: DocsIngestResponse = harbor
+                .post_json(
+                    "/v1/docs/ingest",
+                    &DocsIngestRequest {
+                        tenant_id: tenant,
+                        agent_id: agent,
+                        path: i.path,
+                    },
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+            println!("document_id={}", res.document_id);
+        }
+        DocsCommand::Search(s) => {
+            #[derive(Debug, Serialize)]
+            struct EchoReq {
+                tenant_id: Uuid,
+                agent_id: Uuid,
+                query: String,
+                top_k: Option<usize>,
+                min_confidence: Option<f64>,
+                pearl_type: Option<lorelei_core::types::PearlType>,
+                sources: Option<String>,
+            }
+            let hits: Vec<lorelei_core::types::EchoHit> = harbor
+                .post_json(
+                    "/v1/echo",
+                    &EchoReq {
+                        tenant_id: tenant,
+                        agent_id: agent,
+                        query: s.query,
+                        top_k: s.top_k,
+                        min_confidence: None,
+                        pearl_type: None,
+                        sources: Some("documents".to_string()),
+                    },
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+
+            for h in hits {
+                if let Some(c) = h.citation {
+                    println!(
+                        "{}\t{}\t#{}\t{}",
+                        h.score.get(),
+                        c.title,
+                        c.chunk_index,
+                        h.content.replace('\n', " ")
+                    );
+                } else {
+                    println!("{}\t{}", h.score.get(), h.content.replace('\n', " "));
+                }
             }
         }
     }

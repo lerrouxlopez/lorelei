@@ -89,6 +89,32 @@ pub trait EchoRetriever: Send + Sync {
 }
 
 #[async_trait]
+pub trait DocumentStore: Send + Sync {
+    async fn ingest_document_path(
+        &self,
+        tenant_id: TenantId,
+        agent_id: AgentId,
+        path: &std::path::Path,
+    ) -> Result<uuid::Uuid, LoreleiError>;
+
+    /// Load a single chunk for Echo display, including citation metadata.
+    async fn get_document_chunk_for_echo(
+        &self,
+        tenant_id: TenantId,
+        chunk_id: uuid::Uuid,
+    ) -> Result<
+        Option<(String, crate::types::EchoCitation, chrono::DateTime<chrono::Utc>)>,
+        LoreleiError,
+    >;
+
+    async fn soft_delete_document(
+        &self,
+        tenant_id: TenantId,
+        document_id: uuid::Uuid,
+    ) -> Result<(), LoreleiError>;
+}
+
+#[async_trait]
 pub trait Shell: Send + Sync {
     async fn call(&self, call: ShellCall) -> Result<ShellResult, LoreleiError>;
 }

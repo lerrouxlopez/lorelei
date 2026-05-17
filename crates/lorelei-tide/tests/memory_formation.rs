@@ -8,7 +8,7 @@ use lorelei_core::traits::{
     CurrentStore, EchoRetriever, LoreStore, ShellRegistry, SirenPolicy, SongProvider,
 };
 use lorelei_core::types::{
-    AgentId, CurrentEvent, CurrentEventType, EchoHit, EchoQuery, NewPearl, Pearl, PearlId,
+    AgentId, CurrentEvent, CurrentEventType, EchoHit, EchoQuery, EchoSources, NewPearl, Pearl, PearlId,
     PearlListQuery, PearlType, Run, RunId, RunStatus, ShellCall, ShellResult, SongChunk,
     SongRequest, SongResponse, TenantId, UnitInterval,
 };
@@ -596,6 +596,7 @@ async fn accepted_pearl_is_searchable_by_echo_integration() {
                 top_k: 10,
                 min_confidence: Some(UnitInterval::new(0.0).unwrap()),
                 pearl_type: None,
+                sources: EchoSources::Pearls,
             },
         )
         .await

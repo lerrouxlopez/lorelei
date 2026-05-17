@@ -203,6 +203,21 @@ pub struct EchoQuery {
     pub top_k: usize,
     pub min_confidence: Option<UnitInterval>,
     pub pearl_type: Option<PearlType>,
+    #[serde(default)]
+    pub sources: EchoSources,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EchoSources {
+    Pearls,
+    Documents,
+    All,
+}
+
+impl Default for EchoSources {
+    fn default() -> Self {
+        Self::Pearls
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -213,6 +228,14 @@ pub struct EchoHit {
     pub pearl_type: PearlType,
     pub reason: String,
     pub created_at: DateTime<Utc>,
+    #[serde(default)]
+    pub citation: Option<EchoCitation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EchoCitation {
+    pub title: String,
+    pub chunk_index: i32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

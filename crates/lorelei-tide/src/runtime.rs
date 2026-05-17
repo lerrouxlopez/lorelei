@@ -7,8 +7,8 @@ use lorelei_core::traits::{
     CurrentStore, EchoRetriever, LoreStore, ShellRegistry, SirenPolicy, SongProvider,
 };
 use lorelei_core::types::{
-    CurrentEvent, CurrentEventType, EchoHit, EchoQuery, NormalizedToolCall, Run, RunId, RunStatus,
-    ShellCall, ShellResult, ShellRisk, SirenDecision, SongRequest, SongResponse, TenantId,
+    CurrentEvent, CurrentEventType, EchoHit, EchoQuery, EchoSources, NormalizedToolCall, Run, RunId,
+    RunStatus, ShellCall, ShellResult, ShellRisk, SirenDecision, SongRequest, SongResponse, TenantId,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -211,6 +211,7 @@ impl SingleAgentTideRuntime {
                         top_k: self.config.echo.top_k,
                         min_confidence: self.config.echo.min_confidence,
                         pearl_type: None,
+                        sources: EchoSources::Pearls,
                     },
                 )
                 .instrument(info_span!("tide.echo"))
@@ -736,6 +737,7 @@ impl SingleAgentTideRuntime {
                         top_k: 5,
                         min_confidence: self.config.echo.min_confidence,
                         pearl_type: None,
+                        sources: EchoSources::Pearls,
                     },
                 )
                 .await

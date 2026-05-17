@@ -4,10 +4,10 @@ use crate::registry::{ShellSpec, ShellTool};
 use async_trait::async_trait;
 use lorelei_core::config::LoreleiConfig;
 use lorelei_core::error::LoreleiError;
-use lorelei_core::traits::{EchoRetriever, LoreStore};
+use lorelei_core::traits::{DocumentStore, EchoRetriever, LoreStore};
 use lorelei_core::types::{
-    EchoQuery, NewPearl, PearlId, PearlListQuery, PearlType, ShellCall, ShellResult, ShellRisk,
-    UnitInterval,
+    EchoQuery, EchoSources, NewPearl, PearlId, PearlListQuery, PearlType, ShellCall, ShellResult,
+    ShellRisk, UnitInterval,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -20,6 +20,7 @@ pub fn builtin_tools(
     cfg: &LoreleiConfig,
     lore: Arc<dyn LoreStore>,
     echo: Arc<dyn EchoRetriever>,
+    documents: Arc<dyn DocumentStore>,
 ) -> BTreeMap<String, Arc<dyn ShellTool>> {
     let mut out: BTreeMap<String, Arc<dyn ShellTool>> = BTreeMap::new();
 
@@ -56,6 +57,17 @@ pub fn builtin_tools(
                 .build()
                 .expect("http client"),
         }),
+    );
+
+    out.insert(
+        "document_ingest".to_string(),
+        Arc::new(DocumentIngestTool {
+            documents: documents.clone(),
+        }),
+    );
+    out.insert(
+        "document_search".to_string(),
+        Arc::new(DocumentSearchTool { echo }),
     );
 
     out
@@ -291,6 +303,7 @@ impl ShellTool for EchoLoreTool {
                         .as_deref()
                         .map(parse_pearl_type)
                         .transpose()?,
+                    sources: EchoSources::Pearls,
                 },
             )
             .await?;
@@ -392,6 +405,82 @@ struct HttpGetInput {
 struct HttpGetTool {
     cfg: LoreleiConfig,
     http: reqwest::Client,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct DocumentIngestInput {
+    path: String,
+}
+
+struct DocumentIngestTool {
+    documents: Arc<dyn DocumentStore>,
+}
+
+#[async_trait]
+impl ShellTool for DocumentIngestTool {
+    fn spec(&self) -> ShellSpec {
+        ShellSpec {
+            name: "document_ingest",
+            description:
+                "Ingest a local text/Markdown document into The Reef (directory-limited).",
+            input_schema: schema_for::<DocumentIngestInput>(),
+            risk: ShellRisk::Medium,
+        }
+    }
+
+    async fn execute(&self, call: ShellCall) -> Result<ShellResult, LoreleiError> {
+        let input: DocumentIngestInput = decode_input(&call)?;
+        let id = self
+            .documents
+            .ingest_document_path(call.tenant_id, call.agent_id, std::path::Path::new(&input.path))
+            .await?;
+        Ok(ok(call.call_id, json!({ "document_id": id })))
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct DocumentSearchInput {
+    query: String,
+    #[serde(default)]
+    top_k: Option<usize>,
+}
+
+struct DocumentSearchTool {
+    echo: Arc<dyn EchoRetriever>,
+}
+
+#[async_trait]
+impl ShellTool for DocumentSearchTool {
+    fn spec(&self) -> ShellSpec {
+        ShellSpec {
+            name: "document_search",
+            description: "Search ingested documents (tenant-scoped, read-only).",
+            input_schema: schema_for::<DocumentSearchInput>(),
+            risk: ShellRisk::Low,
+        }
+    }
+
+    async fn execute(&self, call: ShellCall) -> Result<ShellResult, LoreleiError> {
+        let input: DocumentSearchInput = decode_input(&call)?;
+        let hits = self
+            .echo
+            .query(
+                call.tenant_id,
+                call.agent_id,
+                EchoQuery {
+                    query: input.query,
+                    top_k: input.top_k.unwrap_or(10),
+                    min_confidence: None,
+                    pearl_type: None,
+                    sources: EchoSources::Documents,
+                },
+            )
+            .await?;
+        Ok(ok(
+            call.call_id,
+            serde_json::to_value(hits).unwrap_or(Value::Null),
+        ))
+    }
 }
 
 fn parse_pearl_type(s: &str) -> Result<PearlType, LoreleiError> {

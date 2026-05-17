@@ -2,9 +2,9 @@
 
 use chrono::{DateTime, Utc};
 use lorelei_core::error::LoreleiError;
-use lorelei_core::traits::{EchoRetriever, LoreStore};
+use lorelei_core::traits::{DocumentStore, EchoRetriever, LoreStore};
 use lorelei_core::types::{
-    AgentId, EchoHit, EchoQuery, Pearl, PearlId, PearlType, TenantId, UnitInterval,
+    AgentId, EchoHit, EchoQuery, EchoSources, Pearl, PearlId, PearlType, TenantId, UnitInterval,
 };
 use lorelei_lore::embedding::EmbeddingProvider;
 use lorelei_lore::qdrant::QdrantPearlIndex;
@@ -37,8 +37,9 @@ pub trait QueryRewriter: Send + Sync {
     ) -> Result<String, LoreleiError>;
 }
 
-pub struct EchoEngine<S: LoreStore> {
-    store: S,
+pub struct EchoEngine {
+    store: Arc<dyn LoreStore>,
+    documents: Option<Arc<dyn DocumentStore>>,
     index: QdrantPearlIndex,
     embedder: Arc<dyn EmbeddingProvider>,
     embedding_provider: String,
@@ -46,22 +47,28 @@ pub struct EchoEngine<S: LoreStore> {
     rewriter: Option<Arc<dyn QueryRewriter>>,
 }
 
-impl<S: LoreStore> EchoEngine<S> {
+impl EchoEngine {
     pub fn new(
-        store: S,
+        store: impl LoreStore + 'static,
         index: QdrantPearlIndex,
         embedder: Arc<dyn EmbeddingProvider>,
         embedding_provider: impl Into<String>,
         cfg: EchoRetrievalConfig,
     ) -> Self {
         Self {
-            store,
+            store: Arc::new(store),
+            documents: None,
             index,
             embedder,
             embedding_provider: embedding_provider.into(),
             cfg,
             rewriter: None,
         }
+    }
+
+    pub fn with_documents(mut self, store: Arc<dyn DocumentStore>) -> Self {
+        self.documents = Some(store);
+        self
     }
 
     pub fn with_rewriter(mut self, rewriter: Arc<dyn QueryRewriter>) -> Self {
@@ -159,7 +166,7 @@ impl<S: LoreStore> EchoEngine<S> {
 }
 
 #[async_trait::async_trait]
-impl<S: LoreStore + Send + Sync> EchoRetriever for EchoEngine<S> {
+impl EchoRetriever for EchoEngine {
     async fn query(
         &self,
         tenant_id: TenantId,
@@ -190,18 +197,49 @@ impl<S: LoreStore + Send + Sync> EchoRetriever for EchoEngine<S> {
             return Ok(Vec::new());
         }
 
-        // Collect hits across variants; keep max vector score per pearl.
+        // Collect hits across variants; keep max vector score per id.
         let mut best_vec: HashMap<PearlId, f32> = HashMap::new();
+        let mut best_meta: HashMap<PearlId, (Option<uuid::Uuid>, Option<i32>, Option<String>)> =
+            HashMap::new();
         for v in emb.vectors {
-            let hits = self
-                .index
-                .search_pearl_vectors(tenant_id, v, query.top_k as u64, Some(agent_id))
-                .await?;
-            for h in hits {
+            let mut all_hits = Vec::new();
+            match query.sources {
+                EchoSources::Pearls => {
+                    all_hits = self
+                        .index
+                        .search_pearl_vectors(tenant_id, v, query.top_k as u64, Some(agent_id))
+                        .await?;
+                }
+                EchoSources::Documents => {
+                    all_hits = self
+                        .index
+                        .search_document_chunk_vectors(
+                            tenant_id,
+                            v,
+                            query.top_k as u64,
+                            Some(agent_id),
+                        )
+                        .await?;
+                }
+                EchoSources::All => {
+                    let mut p = self
+                        .index
+                        .search_pearl_vectors(tenant_id, v.clone(), query.top_k as u64, Some(agent_id))
+                        .await?;
+                    let mut d = self
+                        .index
+                        .search_document_chunk_vectors(tenant_id, v, query.top_k as u64, Some(agent_id))
+                        .await?;
+                    p.append(&mut d);
+                    all_hits = p;
+                }
+            }
+            for h in all_hits {
                 best_vec
                     .entry(h.pearl_id)
                     .and_modify(|s| *s = (*s).max(h.score))
                     .or_insert(h.score);
+                best_meta.insert(h.pearl_id, (h.document_id, h.chunk_index, h.title));
             }
         }
 
@@ -218,12 +256,31 @@ impl<S: LoreStore + Send + Sync> EchoRetriever for EchoEngine<S> {
             return Ok(Vec::new());
         }
 
-        // Fetch pearls from Postgres (source of truth) and filter.
+        // Fetch pearls (and/or document chunks) from Postgres (source of truth) and filter.
         let mut pearls: Vec<(Pearl, f32)> = Vec::new();
+        let mut doc_chunks: Vec<(PearlId, f32, lorelei_core::types::EchoCitation, chrono::DateTime<chrono::Utc>, String)> = Vec::new();
         let mut missing = Vec::new();
         let candidate_count = best_vec.len();
-        for (pearl_id, vec_score) in best_vec {
-            match self.fetch_pearl(tenant_id, pearl_id).await? {
+        for (id, vec_score) in best_vec {
+            let meta = best_meta.get(&id).cloned().unwrap_or((None, None, None));
+            let is_doc = meta.0.is_some();
+            if matches!(query.sources, EchoSources::Documents)
+                || (matches!(query.sources, EchoSources::All) && is_doc)
+            {
+                let Some(docs) = &self.documents else {
+                    missing.push(id);
+                    continue;
+                };
+                match docs.get_document_chunk_for_echo(tenant_id, id.0).await? {
+                    Some((content, citation, created_at)) => {
+                        doc_chunks.push((id, vec_score, citation, created_at, content));
+                    }
+                    None => missing.push(id),
+                }
+                continue;
+            }
+
+            match self.fetch_pearl(tenant_id, id).await? {
                 Some(p) => {
                     if let Some(min_conf) = query.min_confidence {
                         if p.confidence.get() < min_conf.get() {
@@ -237,7 +294,7 @@ impl<S: LoreStore + Send + Sync> EchoRetriever for EchoEngine<S> {
                     }
                     pearls.push((p, vec_score));
                 }
-                None => missing.push(pearl_id),
+                None => missing.push(id),
             }
         }
         for id in missing {
@@ -261,12 +318,41 @@ impl<S: LoreStore + Send + Sync> EchoRetriever for EchoEngine<S> {
                 pearl_type: pearl.pearl_type,
                 reason,
                 created_at: pearl.created_at,
+                citation: None,
             };
             let final_score = score.get();
             if seen_content.insert(pearl.content) {
                 ranked.push((hit, final_score));
             } else {
                 // keep duplicates out
+            }
+        }
+
+        for (chunk_id, vec_score, citation, created_at, content) in doc_chunks {
+            let dup = if seen_content.contains(&content) { 0.15 } else { 0.0 };
+            let (score, reason) = Self::combined_score(vec_score, &Pearl {
+                pearl_id: chunk_id,
+                tenant_id,
+                agent_id,
+                pearl_type: PearlType::Other,
+                content: content.clone(),
+                importance: UnitInterval::new(0.5)?,
+                confidence: UnitInterval::new(1.0)?,
+                created_at,
+                metadata: Default::default(),
+            }, None, dup)?;
+            let hit = EchoHit {
+                score,
+                pearl_id: chunk_id,
+                content: content.clone(),
+                pearl_type: PearlType::Other,
+                reason,
+                created_at,
+                citation: Some(citation),
+            };
+            let final_score = score.get();
+            if seen_content.insert(content) {
+                ranked.push((hit, final_score));
             }
         }
 

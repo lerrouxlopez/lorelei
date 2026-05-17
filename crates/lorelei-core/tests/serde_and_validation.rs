@@ -46,6 +46,7 @@ fn serde_round_trip_echo_hit() {
         pearl_type: PearlType::Other,
         reason: "v=0.7".to_string(),
         created_at: fixed_time(),
+        citation: None,
     };
 
     let encoded = serde_json::to_string(&hit).unwrap();

@@ -43,9 +43,10 @@ impl BuiltinShellRegistry {
         config: LoreleiConfig,
         lore: Arc<dyn LoreStore>,
         echo: Arc<dyn EchoRetriever>,
+        documents: Arc<dyn lorelei_core::traits::DocumentStore>,
         calls: Arc<dyn ShellCallRepository>,
     ) -> Self {
-        let tools = crate::builtin::builtin_tools(&config, lore, echo);
+        let tools = crate::builtin::builtin_tools(&config, lore, echo, documents);
         Self {
             config,
             tools,

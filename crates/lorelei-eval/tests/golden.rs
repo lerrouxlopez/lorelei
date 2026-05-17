@@ -4,7 +4,7 @@ use lorelei_core::config::LoreleiConfig;
 use lorelei_core::error::LoreleiError;
 use lorelei_core::traits::{EchoRetriever, LoreStore, SongProvider};
 use lorelei_core::types::{
-    AgentId, EchoQuery, NewPearl, PearlId, PearlType, RunStatus, TenantId, UnitInterval,
+    AgentId, EchoQuery, EchoSources, NewPearl, PearlId, PearlType, RunStatus, TenantId, UnitInterval,
 };
 use lorelei_echo::retriever::{EchoEngine, EchoRetrievalConfig};
 use lorelei_harbor::http::server::{router, AppState};
@@ -1509,6 +1509,7 @@ async fn golden_storage_and_echo_integration() {
                 top_k: 5,
                 min_confidence: Some(UnitInterval::new(0.0).unwrap()),
                 pearl_type: None,
+                sources: EchoSources::Pearls,
             },
         )
         .await
@@ -1529,6 +1530,7 @@ async fn golden_storage_and_echo_integration() {
                 top_k: 5,
                 min_confidence: Some(UnitInterval::new(0.0).unwrap()),
                 pearl_type: None,
+                sources: EchoSources::Pearls,
             },
         )
         .await
