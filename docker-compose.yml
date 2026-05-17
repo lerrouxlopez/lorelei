@@ -1,0 +1,136 @@
+name: lorelei
+
+services:
+  migrate:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    env_file:
+      - .env
+    volumes:
+      - ./lorelei.toml:/app/lorelei.toml:ro
+    environment:
+      LORELEI_CONFIG: ${LORELEI_CONFIG:-/app/lorelei.toml}
+      DATABASE_URL: ${DATABASE_URL:-postgres://lorelei:lorelei@postgres:5432/lorelei}
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6334}
+      RUST_LOG: ${RUST_LOG:-info}
+    command: ["lorelei-harbor", "migrate"]
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: lorelei
+      POSTGRES_USER: lorelei
+      POSTGRES_PASSWORD: lorelei
+    ports:
+      - "5432:5432"
+    volumes:
+      - lorelei_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lorelei -d lorelei"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  qdrant:
+    image: qdrant/qdrant:v1.18.0
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - lorelei_qdrant_data:/qdrant/storage
+    healthcheck:
+      # qdrant image doesn't include curl/wget; use bash TCP probe instead
+      test: ["CMD-SHELL", "bash -lc 'exec 3<>/dev/tcp/127.0.0.1/6333'"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["ollama"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - lorelei_ollama_data:/root/.ollama
+    healthcheck:
+      # Avoid curl/wget dependencies inside the image.
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  ollama-pull:
+    image: curlimages/curl:8.12.1
+    profiles: ["ollama"]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    # Pull a small default chat model + embeddings so Lorelei works out-of-the-box.
+    # This can take a while on first run; subsequent runs use the named volume cache.
+    command:
+      [
+        "sh",
+        "-lc",
+        "curl -fsS http://ollama:11434/api/pull -H 'Content-Type: application/json' -d '{\"name\":\"llama3.2:3b\"}' && curl -fsS http://ollama:11434/api/pull -H 'Content-Type: application/json' -d '{\"name\":\"nomic-embed-text\"}'",
+      ]
+
+  harbor:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    env_file:
+      - .env
+    volumes:
+      # Use the repo config file without rebuilding images.
+      - ./lorelei.toml:/app/lorelei.toml:ro
+    environment:
+      LORELEI_CONFIG: ${LORELEI_CONFIG:-/app/lorelei.toml}
+      # Defaults for compose network; safe to override via `.env`
+      DATABASE_URL: ${DATABASE_URL:-postgres://lorelei:lorelei@postgres:5432/lorelei}
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6334}
+      RUST_LOG: ${RUST_LOG:-info}
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    depends_on:
+      harbor:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    env_file:
+      - .env
+    volumes:
+      - ./lorelei.toml:/app/lorelei.toml:ro
+    environment:
+      LORELEI_CONFIG: ${LORELEI_CONFIG:-/app/lorelei.toml}
+      DATABASE_URL: ${DATABASE_URL:-postgres://lorelei:lorelei@postgres:5432/lorelei}
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6334}
+      RUST_LOG: ${RUST_LOG:-info}
+    command: ["lorelei-harbor", "worker"]
+
+volumes:
+  lorelei_postgres_data:
+  lorelei_qdrant_data:
+  lorelei_ollama_data:

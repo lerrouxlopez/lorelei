@@ -1,0 +1,22 @@
+# Rust / Cargo
+/target/
+**/*.rs.bk
+
+# Editors / IDEs
+/.vscode/
+/.idea/
+*.iml
+*.swp
+*.swo
+
+# OS junk
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Local config / secrets
+.env
+.env.*
+!.env.example
+lorelei.toml
+
