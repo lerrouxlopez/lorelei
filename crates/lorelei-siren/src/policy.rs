@@ -64,7 +64,10 @@ impl DeterministicSirenPolicy {
     }
 
     fn risk_for_tools(&self, tools: &[String]) -> lorelei_core::types::ShellRisk {
-        if tools.iter().any(|t| self.high_risk_tools().contains(&t.as_str())) {
+        if tools
+            .iter()
+            .any(|t| self.high_risk_tools().contains(&t.as_str()))
+        {
             return lorelei_core::types::ShellRisk::High;
         }
         if tools
@@ -254,13 +257,16 @@ impl SirenPolicy for DeterministicSirenPolicy {
         let reason = match &det {
             SirenDecision::Allow { reasoning_summary } => reasoning_summary.as_str(),
             SirenDecision::Deny { reasoning_summary } => reasoning_summary.as_str(),
-            SirenDecision::RequireApproval { reasoning_summary, .. } => reasoning_summary.as_str(),
+            SirenDecision::RequireApproval {
+                reasoning_summary, ..
+            } => reasoning_summary.as_str(),
         };
+        let task_id_str = task_id.map(|t| t.0.to_string());
         info!(
             run_id = %run_id.0,
             tenant_id = %tenant_id.0,
             agent_id = %agent_id.0,
-            task_id = task_id.map(|t| t.0),
+            task_id = task_id_str.as_deref(),
             decision = decision,
             risk = ?risk,
             reason = reason,

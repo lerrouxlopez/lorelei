@@ -333,4 +333,34 @@ mod tests {
             _ => panic!("expected task"),
         }
     }
+
+    #[test]
+    fn clap_parses_run_subcommands() {
+        let cli = Cli::try_parse_from(["lore", "run", "inspect", "123"]).unwrap();
+        match cli.command {
+            Command::Run(r) => match r.command {
+                RunCommand::Inspect(a) => assert_eq!(a.run_id, "123"),
+                _ => panic!("expected run inspect"),
+            },
+            _ => panic!("expected run"),
+        }
+
+        let cli = Cli::try_parse_from(["lore", "run", "currents", "abc"]).unwrap();
+        match cli.command {
+            Command::Run(r) => match r.command {
+                RunCommand::Currents(a) => assert_eq!(a.run_id, "abc"),
+                _ => panic!("expected run currents"),
+            },
+            _ => panic!("expected run"),
+        }
+
+        let cli = Cli::try_parse_from(["lore", "run", "memories", "run-1"]).unwrap();
+        match cli.command {
+            Command::Run(r) => match r.command {
+                RunCommand::Memories(a) => assert_eq!(a.run_id, "run-1"),
+                _ => panic!("expected run memories"),
+            },
+            _ => panic!("expected run"),
+        }
+    }
 }

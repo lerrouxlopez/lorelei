@@ -14,8 +14,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use tracing::info_span;
 use tracing::field;
+use tracing::info_span;
 use tracing_futures::Instrument;
 use uuid::Uuid;
 

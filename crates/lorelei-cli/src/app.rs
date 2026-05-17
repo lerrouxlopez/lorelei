@@ -651,14 +651,19 @@ fn cmd_ship(args: ShipArgs) -> Result<i32, String> {
 
 #[derive(Debug, Deserialize)]
 struct CurrentEventResponse {
-    event_id: uuid::Uuid,
-    tenant_id: uuid::Uuid,
-    agent_id: uuid::Uuid,
-    run_id: uuid::Uuid,
     event_type: lorelei_core::types::CurrentEventType,
-    created_at: chrono::DateTime<chrono::Utc>,
+    created_at: String,
     summary: String,
     data: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct RunInspectResponse {
+    run_id: Uuid,
+    tenant_id: Uuid,
+    agent_id: Uuid,
+    status: lorelei_core::types::RunStatus,
+    output: Option<String>,
 }
 
 async fn cmd_run(args: RunArgs) -> Result<(), String> {
@@ -674,11 +679,17 @@ async fn cmd_run(args: RunArgs) -> Result<(), String> {
                 "/v1/runs/{}?tenant_id={}&agent_id={}",
                 r.run_id, tenant, agent
             );
-            let run: RunResponse = harbor.get_json(&path).await.map_err(|e| e.to_string())?;
+            let run: RunInspectResponse =
+                harbor.get_json(&path).await.map_err(|e| e.to_string())?;
             println!(
                 "run {}\tstatus={:?}\ttenant={}\tagent={}",
                 run.run_id, run.status, run.tenant_id, run.agent_id
             );
+            if let Some(out) = run.output {
+                if !out.trim().is_empty() {
+                    println!("{out}");
+                }
+            }
         }
         RunCommand::Currents(r) => {
             let path = format!(
@@ -688,12 +699,7 @@ async fn cmd_run(args: RunArgs) -> Result<(), String> {
             let events: Vec<CurrentEventResponse> =
                 harbor.get_json(&path).await.map_err(|e| e.to_string())?;
             for e in events {
-                println!(
-                    "{}\t{:?}\t{}",
-                    e.created_at.to_rfc3339(),
-                    e.event_type,
-                    e.summary
-                );
+                println!("{}\t{:?}\t{}", e.created_at, e.event_type, e.summary);
             }
         }
         RunCommand::Memories(r) => {
@@ -732,9 +738,11 @@ async fn cmd_run(args: RunArgs) -> Result<(), String> {
 
             for pid in pearl_ids {
                 let p = format!("/v1/pearls/{pid}?tenant_id={tenant}");
-                let pearl: PearlResponse =
-                    harbor.get_json(&p).await.map_err(|e| e.to_string())?;
-                println!("{}\t{:?}\t{}", pearl.pearl_id, pearl.pearl_type, pearl.content);
+                let pearl: PearlResponse = harbor.get_json(&p).await.map_err(|e| e.to_string())?;
+                println!(
+                    "{}\t{:?}\t{}",
+                    pearl.pearl_id, pearl.pearl_type, pearl.content
+                );
             }
         }
     }
