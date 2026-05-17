@@ -70,7 +70,7 @@ impl QdrantPearlIndex {
                 vec![point],
             ))
             .await
-            .map_err(|e| LoreleiError::Internal(format!("qdrant upsert failed: {e}")))?;
+            .map_err(|e| map_qdrant_error("upsert", &self.collection, e))?;
         Ok(())
     }
 
@@ -103,7 +103,7 @@ impl QdrantPearlIndex {
                 vec![point],
             ))
             .await
-            .map_err(|e| LoreleiError::Internal(format!("qdrant upsert failed: {e}")))?;
+            .map_err(|e| map_qdrant_error("upsert", &self.collection, e))?;
         Ok(())
     }
 
@@ -114,6 +114,12 @@ impl QdrantPearlIndex {
         top_k: u64,
         agent_id: Option<AgentId>,
     ) -> Result<Vec<VectorHit>, LoreleiError> {
+        let dim = query_vector.len() as u64;
+        if dim == 0 {
+            return Ok(Vec::new());
+        }
+        self.ensure_collection(dim).await?;
+
         let filter = tenant_filter_with_source(tenant_id, agent_id, "pearl");
         let res = self
             .client
@@ -123,7 +129,7 @@ impl QdrantPearlIndex {
                     .filter(filter),
             )
             .await
-            .map_err(|e| LoreleiError::Internal(format!("qdrant search failed: {e}")))?;
+            .map_err(|e| map_qdrant_error("search", &self.collection, e))?;
 
         let mut out = Vec::with_capacity(res.result.len());
         for p in res.result {
@@ -162,6 +168,12 @@ impl QdrantPearlIndex {
         top_k: u64,
         agent_id: Option<AgentId>,
     ) -> Result<Vec<VectorHit>, LoreleiError> {
+        let dim = query_vector.len() as u64;
+        if dim == 0 {
+            return Ok(Vec::new());
+        }
+        self.ensure_collection(dim).await?;
+
         let filter = tenant_filter_with_source(tenant_id, agent_id, "document_chunk");
         let res = self
             .client
@@ -171,7 +183,7 @@ impl QdrantPearlIndex {
                     .filter(filter),
             )
             .await
-            .map_err(|e| LoreleiError::Internal(format!("qdrant search failed: {e}")))?;
+            .map_err(|e| map_qdrant_error("search", &self.collection, e))?;
 
         let mut out = Vec::with_capacity(res.result.len());
         for p in res.result {
@@ -218,7 +230,7 @@ impl QdrantPearlIndex {
         self.client
             .delete_points(DeletePointsBuilder::new(self.collection.clone()).points(filter))
             .await
-            .map_err(|e| LoreleiError::Internal(format!("qdrant delete failed: {e}")))?;
+            .map_err(|e| map_qdrant_error("delete", &self.collection, e))?;
         Ok(())
     }
 
@@ -235,9 +247,22 @@ impl QdrantPearlIndex {
         self.client
             .delete_points(DeletePointsBuilder::new(self.collection.clone()).points(filter))
             .await
-            .map_err(|e| LoreleiError::Internal(format!("qdrant delete failed: {e}")))?;
+            .map_err(|e| map_qdrant_error("delete", &self.collection, e))?;
         Ok(())
     }
+}
+
+fn map_qdrant_error(op: &str, collection: &str, err: impl std::fmt::Display) -> LoreleiError {
+    let msg = err.to_string();
+    if msg.contains("Vector dimension error") {
+        return LoreleiError::validation(
+            "lore.collection",
+            format!(
+                "qdrant collection `{collection}` vector size mismatch. Set `lore.collection` to a new name (recommended) or wipe the Qdrant volume, then re-index."
+            ),
+        );
+    }
+    LoreleiError::Internal(format!("qdrant {op} failed: {msg}"))
 }
 
 fn tenant_filter_with_source(

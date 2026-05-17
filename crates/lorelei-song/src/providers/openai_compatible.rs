@@ -54,6 +54,16 @@ impl OpenAiCompatibleProvider {
             .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
     }
 
+    fn endpoint(&self, subpath: &str) -> String {
+        let base = self.base_url.trim_end_matches('/');
+        let subpath = subpath.trim_start_matches('/');
+        if base.ends_with("/v1") {
+            format!("{base}/{subpath}")
+        } else {
+            format!("{base}/v1/{subpath}")
+        }
+    }
+
     async fn request_with_retry<TReq: Serialize + ?Sized, TResp: for<'de> Deserialize<'de>>(
         &self,
         url: String,
@@ -115,7 +125,7 @@ impl SongProvider for OpenAiCompatibleProvider {
     }
 
     async fn complete(&self, request: SongRequest) -> Result<SongResponse, LoreleiError> {
-        let url = format!("{}/v1/chat/completions", self.base_url);
+        let url = self.endpoint("chat/completions");
 
         if Self::log_prompts_enabled() {
             debug!(
@@ -218,7 +228,7 @@ impl SongProvider for OpenAiCompatibleProvider {
                 message: "embedding_model is required for embeddings".to_string(),
             })?;
 
-        let url = format!("{}/v1/embeddings", self.base_url);
+        let url = self.endpoint("embeddings");
         let body = EmbeddingsRequest {
             model,
             input: request.inputs,

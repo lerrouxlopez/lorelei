@@ -33,16 +33,30 @@ services:
 
   ollama:
     image: ollama/ollama:latest
-    profiles: ["local-llm"]
     ports:
       - "11434:11434"
     volumes:
       - lorelei_ollama_data:/root/.ollama
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:11434/api/tags"]
+      # Avoid curl/wget dependencies inside the image.
+      test: ["CMD", "ollama", "list"]
       interval: 10s
       timeout: 5s
       retries: 12
+
+  ollama-pull:
+    image: curlimages/curl:8.12.1
+    depends_on:
+      ollama:
+        condition: service_healthy
+    # Pull a small default chat model + embeddings so Lorelei works out-of-the-box.
+    # This can take a while on first run; subsequent runs use the named volume cache.
+    command:
+      [
+        "sh",
+        "-lc",
+        "curl -fsS http://ollama:11434/api/pull -H 'Content-Type: application/json' -d '{\"name\":\"llama3.2:3b\"}' && curl -fsS http://ollama:11434/api/pull -H 'Content-Type: application/json' -d '{\"name\":\"nomic-embed-text\"}'",
+      ]
 
   harbor:
     build:
@@ -53,8 +67,13 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_healthy
+      ollama:
+        condition: service_healthy
     env_file:
       - .env
+    volumes:
+      # Use the repo config file without rebuilding images.
+      - ./lorelei.toml:/app/lorelei.toml:ro
     environment:
       LORELEI_CONFIG: ${LORELEI_CONFIG:-/app/lorelei.toml}
       # Defaults for compose network; safe to override via `.env`
@@ -78,6 +97,8 @@ services:
         condition: service_healthy
     env_file:
       - .env
+    volumes:
+      - ./lorelei.toml:/app/lorelei.toml:ro
     environment:
       LORELEI_CONFIG: ${LORELEI_CONFIG:-/app/lorelei.toml}
       DATABASE_URL: ${DATABASE_URL:-postgres://lorelei:lorelei@postgres:5432/lorelei}

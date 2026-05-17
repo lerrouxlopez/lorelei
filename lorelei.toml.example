@@ -7,8 +7,8 @@
 [agent]
 tenant_id = "00000000-0000-0000-0000-000000000001"
 agent_id = "00000000-0000-0000-0000-000000000002"
-default_provider = "mock"
-default_embedding_provider = "mock"
+default_provider = "ollama"
+default_embedding_provider = "ollama"
 
 [harbor]
 host = "0.0.0.0"
@@ -17,7 +17,7 @@ port = 8080
 [lore]
 postgres_url_env = "DATABASE_URL"
 qdrant_url_env = "QDRANT_URL"
-collection = "lorelei"
+collection = "lorelei_ollama"
 
 [echo]
 top_k = 20
@@ -40,3 +40,34 @@ base_url = "http://127.0.0.1:0"
 api_key_env = "LORELEI_MOCK_API_KEY"
 chat_model = "mock-chat"
 embedding_model = "mock-embed"
+
+# --- Example providers (pick one and set [agent].default_provider / default_embedding_provider) ---
+
+# OpenAI (OpenAI-compatible)
+# Requires `OPENAI_API_KEY` in your environment.
+#[providers.openai]
+#kind = "openai-compatible"
+#base_url = "https://api.openai.com/v1"
+#api_key_env = "OPENAI_API_KEY"
+#chat_model = "gpt-4o-mini"
+#embedding_model = "text-embedding-3-small"
+
+# Anthropic (native)
+# Requires `ANTHROPIC_API_KEY` in your environment.
+#[providers.anthropic]
+#kind = "anthropic"
+#base_url = "https://api.anthropic.com"
+#api_key_env = "ANTHROPIC_API_KEY"
+#chat_model = "claude-3-5-sonnet-latest"
+#embedding_model = "claude-3-5-sonnet-latest" # optional; set only if your setup supports embeddings
+
+# Local LLM via Ollama (served as OpenAI-compatible; see `docker-compose.yml`)
+# Ollama's OpenAI-compatible endpoint is typically `http://localhost:11434/v1` (host) or
+# `http://ollama:11434/v1` (docker compose network).
+# Some servers ignore the API key; set a dummy env var if needed.
+[providers.ollama]
+kind = "local"
+base_url = "http://ollama:11434/v1"
+api_key_env = "LORELEI_LOCAL_API_KEY"
+chat_model = "llama3.2:3b"
+embedding_model = "nomic-embed-text"

@@ -835,8 +835,32 @@ impl LoreCriticOutput {
 }
 
 fn parse_planner_output(raw: &str) -> Result<PlannerOutput, LoreleiError> {
-    serde_json::from_str(raw)
-        .map_err(|e| LoreleiError::validation("planner.json", format!("invalid planner JSON: {e}")))
+    let plan: PlannerOutput = serde_json::from_str(raw).map_err(|e| {
+        LoreleiError::validation("planner.json", format!("invalid planner JSON: {e}"))
+    })?;
+
+    match plan.action.as_str() {
+        "answer" => Ok(plan),
+        "call_shell" => {
+            if plan.tool.as_deref().unwrap_or_default().trim().is_empty() {
+                return Err(LoreleiError::validation(
+                    "planner.json",
+                    "missing tool for call_shell action",
+                ));
+            }
+            if plan.input.is_none() {
+                return Err(LoreleiError::validation(
+                    "planner.json",
+                    "missing input for call_shell action",
+                ));
+            }
+            Ok(plan)
+        }
+        _ => Err(LoreleiError::validation(
+            "planner.json",
+            "unknown action (expected `answer` or `call_shell`)",
+        )),
+    }
 }
 
 fn normalize(s: &str) -> String {

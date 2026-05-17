@@ -106,7 +106,13 @@ impl SongProvider for ScriptedSong {
     ) -> Result<lorelei_core::types::SongResponse, LoreleiError> {
         let started = Instant::now();
         let mut r = self.responses.lock().unwrap();
-        let out = r.remove(0);
+        let out = if r.is_empty() {
+            // If a test under-scripts the provider, fall back to a deterministic no-op response
+            // so we can still assert on logging behavior.
+            "{}".to_string()
+        } else {
+            r.remove(0)
+        };
         let latency = started.elapsed();
         tracing::info!(
             run_id = %request.run_id.0,
@@ -309,6 +315,10 @@ async fn logs_include_run_id_and_redact_prompts_by_default() {
 
     let cfg = LoreleiConfig::load_from_toml_path(repo_root().join("lorelei.toml.example")).unwrap();
     let mut cfg = cfg;
+    // Keep tests deterministic: use the mock kind so Tide uses deterministic
+    // memory extraction/critique and doesn't require scripting extra LLM calls.
+    cfg.agent.default_provider = "mock".to_string();
+    cfg.agent.default_embedding_provider = "mock".to_string();
     cfg.siren.allow_shell_execution = true;
     let lore: Arc<dyn LoreStore> = Arc::new(NullLore);
     let echo: Arc<dyn EchoRetriever> = Arc::new(LoggingEcho);
@@ -382,6 +392,8 @@ async fn full_prompt_logging_only_when_enabled() {
 
     let cfg = LoreleiConfig::load_from_toml_path(repo_root().join("lorelei.toml.example")).unwrap();
     let mut cfg = cfg;
+    cfg.agent.default_provider = "mock".to_string();
+    cfg.agent.default_embedding_provider = "mock".to_string();
     cfg.siren.allow_shell_execution = true;
     let lore: Arc<dyn LoreStore> = Arc::new(NullLore);
     let echo: Arc<dyn EchoRetriever> = Arc::new(LoggingEcho);

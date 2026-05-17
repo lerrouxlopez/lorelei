@@ -610,7 +610,15 @@ fn cmd_reef(cmd: ReefCommand) -> Result<i32, String> {
     match cmd {
         ReefCommand::Up(args) => run_compose(
             &args.common.compose_file,
-            &["up", "-d", "postgres", "qdrant", "harbor"],
+            &[
+                "up",
+                "-d",
+                "postgres",
+                "qdrant",
+                "ollama",
+                "ollama-pull",
+                "harbor",
+            ],
         ),
         ReefCommand::Down(args) => run_compose(&args.compose_file, &["down"]),
         ReefCommand::Logs(args) => {
@@ -621,6 +629,7 @@ fn cmd_reef(cmd: ReefCommand) -> Result<i32, String> {
                 "harbor".to_string(),
                 "postgres".to_string(),
                 "qdrant".to_string(),
+                "ollama".to_string(),
             ];
             if args.follow {
                 parts.insert(1, "-f".to_string());
